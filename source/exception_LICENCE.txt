@@ -1,0 +1,95 @@
+############################################################
+Licence to use exception.h and the exceptions programmed by Torsten Mayer-Guerr (University of Bonn, Germany) 
+within WaterGAP
+Requisite: Proper citation!
+
+Status: 2015-10-12 
+############################################################
+
+Datum:  	Mon, 12 Oct 2015 02:07:56 +0200 [02:07:56 CEST]
+Von:  	Maike Schumacher <schumacher@geod.uni-bonn.de> Deutschland
+An:  	Portmann@em.uni-frankfurt.de
+Betreff:  	Re: Nutzung exception.h für WaterGAP bei uns?
+
+Hallo Felix,
+
+ich habe mit Prof. Jürgen Kusche gesprochen. Da es sich ja nur um ein paar Code-Zeilen und den Umgang mit Exceptions handelt, hat er nichts dagegen, dass du den Code von Torsten Mayer-Guerr verwendest (mit Referenz).
+
+Viele Grüße aus Canberra.
+Maike
+
+
+Am 8. Oktober 2015 um 17:38 schrieb <Portmann@em.uni-frankfurt.de>:
+
+    Hallo Maike,
+
+
+    da ich dich telefonisch nicht erreichen konnte und ich morgen in Mainz bin:
+
+    Hast du noch herausfinden können, ob wir in Frankfurt für WaterGAP euren Code der Exceptions von Torsten Mayer-Guerr kostenlos nutzen und ggf. mit dem Code an weitere WaterGAP-Entwickler (z.Z. CESR Uni Kassel, GFZ) weiterreichen können?
+
+    /***********************************************/
+    /**
+    * @file exception.h
+    *
+    * @brief Exception handling.
+    *
+    * @author Torsten Mayer-Guerr
+    * @date 2001-06-16
+    *
+
+
+    Ansonsten viel Erfolg in Australien!
+
+
+    Viele Grüße
+    Felix
+
+
+
+    --
+    Dr. Felix Portmann
+
+    Goethe-Universität Frankfurt, Arbeitsgruppe Hydrologie
+    Goethe-University Frankfurt, Working Group Hydrology
+    E-mail: portmann@em.uni-frankfurt.de
+
+    Availability this week:
+    Mon, Tue, Wed, Thu:
+    Phone: +49 (0) 69 - 798 - 40218
+
+    Working Group Hydrology: http://www2.uni-frankfurt.de/45217668/dl
+    Personal Goethe-University: https://www2.uni-frankfurt.de/45217717/portmann
+    BiK-F homepage: http://www.bik-f.de/root/index.php?page_id=71
+
+    Johann Wolfgang Goethe-University Frankfurt am Main
+    Institute of Physical Geography (IPG)
+    Geocentre, 4th floor, room GW 3.113
+    Office: Altenhoeferallee 1, 60438 Frankfurt am Main, GERMANY
+    Letters: P.O. Box 11 19 32, 60054 Frankfurt am Main, GERMANY
+    ----
+
+
+
+
+-- 
+---------------------------------------------------------------------------------------------------------
+Maike Schumacher
+
+Astronomical, Physical and Mathematical Geodesy (APMG) Group
+
+Institute of Geodesy and Geoinformation (IGG)
+
+University of Bonn
+
+Nussallee 17
+
+D-53115 Bonn
+
+Office : 0049 228 733578
+
+Email: schumacher@geod.uni-bonn.de
+
+http://www.igg.uni-bonn.de/apmg/index.php?id=schumacher
+
+---------------------------------------------------------------------------------------------------------
