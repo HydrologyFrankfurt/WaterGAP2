@@ -1,0 +1,24 @@
+/* Copyright (c) 1996-2020 University of Kassel */
+/* Copyright (c) 2003-2022 Goethe University Frankfurt */
+/* Contributors:
+Alcamo, Joseph
+Aus der Beek, Tim
+Cáceres, Denise
+Döll, Petra
+Eisner, Stephanie
+Flörke, Martina
+Herbert, Claudia
+Kaspar, Frank
+Lehner, Bernhard
+Malsy, Marcus
+Müller Schmied, Hannes
+Peiris, Thedini Asali
+Popat, Eklavyya
+Portmann, Felix
+Reinecke, Robert
+Siebert, Stefan
+Trautmann, Tim
+Vassolo, Sara
+Verzano, Kerstin
+*/
+/* License  LGPLv3 see also LICENSE*/
