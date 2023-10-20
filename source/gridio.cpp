@@ -1,4 +1,3 @@
-
 /***********************************************************************
 *
 * see former changes at file gridio.cpp.versioninfos.txt

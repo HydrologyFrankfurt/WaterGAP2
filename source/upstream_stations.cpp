@@ -1,25 +1,14 @@
-
-/***********************************************************************
-*
-* see former changes at file upstream_stations.cpp.versioninfos.txt
-*
-***********************************************************************/
-#include <iostream>
 #include <cstdio>
 #include <cstdlib>
-#include <fstream>
 #include "timestring.h"
-#include "calib_basins.h"
-#include "gridio.h"
 #include "timestring.h"
 #include "def.h"
+#include "globals.h"
+#include "common.h"
 
-#include "upstream_stations.h"
 
 using namespace std;
 
-extern cbasinClass cbasin;
-extern gridioClass gridIO;
 
 upstreamStationClass::upstreamStationClass()
 {
@@ -60,26 +49,25 @@ upstreamStationClass::~upstreamStationClass()
 	delete[]numberOfUpstreamStations;
 }
 
-void upstreamStationClass::findAllStations(char *routing_dir)
+void upstreamStationClass::findAllStations(const std::string routing_dir)
 {
 	findStations(routing_dir, 1);
 }
 
-void upstreamStationClass::findDirectStations(char *routing_dir)
+void upstreamStationClass::findDirectStations(const std::string routing_dir)
 {
 	// direct stations are those, which can be reached through the river
 	// network without crossing a cell which has another station
 	findStations(routing_dir, 0);
 }
 
-void upstreamStationClass::findStations(char *routing_dir, short allStationOption)
+void upstreamStationClass::findStations(const std::string routing_dir, short allStationOption)
 {
 	char filename[250];
 
-	int G_inflow_cells[ng][9];
+	VariableChannelGrid<9,int> G_inflow_cells;
 
-	sprintf(filename, "%s/G_INFLC.9.UNF4", routing_dir);
-	gridIO.readUnfFile(filename, 9 * ng, &G_inflow_cells[0][0]);
+	G_inflow_cells.read(routing_dir + "/G_INFLC.9.UNF4");
 
 	int n, cbasinCellNum, cb2, inflowCell, cellsToBeDone;
 	short i, cellInList;
@@ -96,7 +84,7 @@ void upstreamStationClass::findStations(char *routing_dir, short allStationOptio
 	for (n = 0; n <= numberOfBasins - 1; n++)
 		upstreamStationList[n] = NULL;
 
-	char G_done[ng];
+	Grid<char> G_done;
 
 	// 0: nothing has been done with the cell up to now
 	// 1: cell has to be check within next step
@@ -117,7 +105,7 @@ void upstreamStationClass::findStations(char *routing_dir, short allStationOptio
 					G_done[n] = 2;
 					for (i = 0; i <= 8; i++) {
 						// go to all direct upstream cells
-						inflowCell = G_inflow_cells[n][i];
+						inflowCell = G_inflow_cells(n,i);
 						if (inflowCell != 0) {
 							// is the cell in the list of cells with stations?
 							cellInList = 0;
@@ -215,7 +203,7 @@ short upstreamStationClass::getUpstreamStation(int stn, short i)
 	}
 }
 
-void upstreamStationClass::writeListToFile(char *filename, char *filename_no)
+void upstreamStationClass::writeListToFile(const std::string filename, const std::string filename_no)
 {
 	ofstream outputFile(filename);
 	ofstream outputFile_no(filename_no);
@@ -246,15 +234,11 @@ void upstreamStationClass::writeListToFile(char *filename, char *filename_no)
 	outputFile_no.close();
 }
 
-void upstreamStationClass::replaceGridValues(int st,
-                                                                                         float newValue, double *Grid, float *upValueList)
+void upstreamStationClass::replaceGridValues(int st, float newValue, Grid<> & Gridp, std::vector<float> upValueList)
 {
-	extern short G_sbasin[ng];
-
 	for (int m = 0; m <= ng - 1; m++)
 		if (G_sbasin[m] == st) {
-			Grid[m] = newValue;
-			//cout << st << ' ' << m << ' ' << newValue << endl;
+			Gridp[m] = newValue;
 		}
 	// go through the list of upstream stations.
 	// if no value is given use the same, otherwise ignore.
@@ -264,6 +248,6 @@ void upstreamStationClass::replaceGridValues(int st,
 	for (int n = 1; n <= getNumberOfUpstreamStations(st); n++) {
 		upSt = getUpstreamStation(st, n);
 		if (upValueList[upSt - 1] < 0)
-			upstreamStationClass::replaceGridValues(upSt, newValue, Grid, upValueList);
+			upstreamStationClass::replaceGridValues(upSt, newValue, Gridp, upValueList);
 	}
 }

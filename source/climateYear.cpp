@@ -9,79 +9,48 @@
 *http://presentations.copernicus.org/EGU2011-1949_presentation.pdf
 *
 ***********************************************************************/
-#include "gridio.h"
-#include "option.h"
-#include "climate.h"
+#include "common.h"
 #include "def.h"
+#include "globals.h"
 
 #include "climateYear.h"
 
 using namespace std;
 
 extern climateClass climate;
-extern gridioClass gridIO;
 extern optionClass options;
 
 climateYearClass::climateYearClass(void)
 {
-    //nothiung to do
+    //nothing to do
 }
 
 void climateYearClass::init()
 {
-	// init year daily values
-	G_temperature_d365 = new float [ng][365];
-	G_precipitation_d365 = new float [ng][365];
-	G_shortwave_d365 = new float[ng][365];
-	G_longwave_d365 = new float[ng][365];
 }
 
 void climateYearClass::cleanup()
 {
-    // delete stored year daily values
-    delete[] G_temperature_d365;
-    G_temperature_d365 = 0;
-	
-    delete[] G_precipitation_d365;
-    G_precipitation_d365 = 0;
-    
-    delete[] G_shortwave_d365;
-    G_shortwave_d365 = 0;
-	
-    delete[] G_longwave_d365;
-    G_longwave_d365     = 0;
 }
 
 // daily data (.365)
 // read in daily data per year
-void climateYearClass::read_climate_data_daily_per_year(short actual_year, short data_d)
+void climateYearClass::read_climate_data_daily_per_year(short actual_year)
 {
-  char filename[250];
-	
-	if (options.time_series == 3) {
-        // read daily precipitation [mm]
-	  sprintf(filename, "%s/G_GPCC_H08day_V20110128_%d.%d.UNF0", options.climate_dir, actual_year, data_d);
-	  gridIO.readUnfFile(filename, ng * data_d, &G_precipitation_d365[0][0]);
-	}
-	else {
-		// read temperature data
-		// daily values [deg C]
-		sprintf(filename, "%s/G_TEMP_H08_int_%d.%d.UNF0", options.climate_dir, actual_year, data_d);
-		gridIO.readUnfFile(filename, ng * data_d, &G_temperature_d365[0][0]);
-	
-		// read daily precipitation [mm]
-		sprintf(filename, "%s/G_GPCC_H08day_V20110128_%d.%d.UNF0", options.climate_dir, actual_year, data_d);
-		gridIO.readUnfFile(filename, ng * data_d, &G_precipitation_d365[0][0]);
-	
-		// read daily shortwave radiation [W/m2]
-		sprintf(filename, "%s/G_SSRD_H08_int_%d.%d.UNF0", options.climate_dir, actual_year, data_d);
-		gridIO.readUnfFile(filename, ng * data_d, &G_shortwave_d365[0][0]);
-	
-		// read daily longwave radiation [W/m2]
-		sprintf(filename, "%s/G_SLRD_H08_int_%d.%d.UNF0", options.climate_dir, actual_year, data_d);
-		gridIO.readUnfFile(filename, ng * data_d, &G_longwave_d365[0][0]);
-	}
-	return;
+	string climateDir = string(options.climate_dir);
+
+	// read temperature data
+	// daily values [deg C]
+	G_temperature_d365.read(climateDir + "/G_TEMP_H08_int_" + to_string(actual_year) + ".365.UNF0");
+
+	// read daily precipitation [mm]
+	G_precipitation_d365.read(climateDir + "/G_GPCC_H08day_V20110128_" + to_string(actual_year) + ".365.UNF0");
+
+	// read daily shortwave radiation [W/m2]
+	G_shortwave_d365.read(climateDir + "/G_SSRD_H08_int_" + to_string(actual_year) + ".365.UNF0");
+
+	// read daily longwave radiation [W/m2]
+	G_longwave_d365.read(climateDir + "/G_SLRD_H08_int_" + to_string(actual_year) + ".365.UNF0");
 }
 
 // split yearly data to daily data
@@ -91,32 +60,24 @@ void climateYearClass::split_climate_data_from_year_to_daily(short dayOfTheYear,
 	short lastDayOfMonth = dayOfTheYear + numberDaysInMonth;
 	for (short j = dayOfTheYear; j < lastDayOfMonth; j++) {
 		for (long i = 0; i < ng; i++) {
-	    if (options.time_series == 3) {
-			  // read daily precipitation [mm]
-			  climate.G_precipitation_d[i][day] = G_precipitation_d365[i][j];
-			}
-      else {
-        // read temperature data
-			  // daily values [oC]
-			  climate.G_temperature_d[i][day] = G_temperature_d365[i][j];
-			  
-        // read daily precipitation [mm]
-			  climate.G_precipitation_d[i][day] = G_precipitation_d365[i][j];
-        
-        // read daily shortwave radiation...
-			  climate.G_shortwave_d[i][day] = G_shortwave_d365[i][j];
-        
-        // ... and longwave radiation      
-			  climate.G_longwave_d[i][day] = G_longwave_d365[i][j];
-			  // climate.G_longwave_d[i][day] = climateYear.G_longwave_d[i][j]; // as example.			  
-		  }
+
+			// read temperature data
+			// daily values [oC]
+			climate.G_temperature_d(i,day) = G_temperature_d365(i,j);
+
+			// read daily precipitation [mm]
+			climate.G_precipitation_d(i,day) = G_precipitation_d365(i,j);
+
+			// read daily shortwave radiation...
+			climate.G_shortwave_d(i,day) = G_shortwave_d365(i,j);
+
+			// ... and longwave radiation
+			climate.G_longwave_d(i,day) = G_longwave_d365(i,j);
 		}
 		day++; //[0..lastDayOfMonth-1]
-	}  
-  return;
+	}
 }
 
 climateYearClass::~climateYearClass(void)
 {
-	// nothing to do
 }

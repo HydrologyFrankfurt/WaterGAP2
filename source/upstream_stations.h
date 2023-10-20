@@ -1,25 +1,31 @@
+#if !defined (_upstream_stations_h_)
+#define _upstream_stations_h_
+
+#include <string>
+#include <vector>
+
 class upstreamStationClass {
-  private:
-	void deleteAllListElements();
-	void findStations(char *routing_dir, short allStationOption);
+  	private:
+		void deleteAllListElements();
+		void findStations(const std::string routing_dir, short allStationOption);
 
-	struct listElement {
-		short station;
-		listElement *next;
-	};
+		struct listElement {
+			short station;
+			listElement *next;
+		};
 
-	listElement **upstreamStationList;
-	short *numberOfUpstreamStations;
-	int numberOfBasins;
+		listElement **upstreamStationList;
+		short *numberOfUpstreamStations;
+		int numberOfBasins;
 
-  public:
-	 upstreamStationClass();
-	~upstreamStationClass();
-	void findAllStations(char *routing_dir);
-	void findDirectStations(char *routing_dir);
-	short getNumberOfUpstreamStations(int n);
-	short getUpstreamStation(int n, short i);
-	void writeListToFile(char *filename, char *filename_no);
-
-        void replaceGridValues(int st, float newValue, double *Grid, float *upValueList);
+  	public:
+		upstreamStationClass();
+		~upstreamStationClass();
+		void findAllStations(const std::string routing_dir);
+		void findDirectStations(const std::string routing_dir);
+		short getNumberOfUpstreamStations(int n);
+		short getUpstreamStation(int n, short i);
+		void writeListToFile(const std::string filename, const std::string filename_no);
+        void replaceGridValues(int st, float newValue, Grid<> & Grid, std::vector<float> upValueList);
 };
+#endif

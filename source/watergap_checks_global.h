@@ -305,7 +305,7 @@ void check_array_short_NaN_YYMMDD(short* array, long n_cells, short year, short 
 void check_array2Dng12_double_LT0(double array[ng][12]) {
     for (long i=0; i<ng; i++) {
         for (long m=0; m<11; m++) {
-            if (array[i][m] < 0) {
+            if (array(i,m) < 0) {
                 throw ExceptionValueLT0_array2Dng12__n_month("check_array2Dng12_double_LT0: value less than zero 0 first at cell index (e.g. gcrc) & month (1-12): ", i, m+1);
             }
         }
@@ -315,7 +315,7 @@ void check_array2Dng12_double_LT0(double array[ng][12]) {
 void check_array2Dng12_double_NaN(double array[ng][12]) {
     for (long i=0; i<ng; i++) {
         for (long m=0; m<11; m++) {
-            if (array[i][m] != array[i][m]) {
+            if (array(i,m) != array(i,m)) {
                 throw ExceptionValueNaN_array2Dng12__n_month("check_array2Dng12_double_NaN: 2D array value NaN first at cell index (e.g. gcrc) & month (1-12): ", i, m+1);
             }
         }
@@ -326,7 +326,7 @@ void check_array2Dng12_double_NaN(double array[ng][12]) {
 void check_array2Dng365_double_LT0(double array[ng][365]) {
     for (long i=0; i<ng; i++) {
         for (long d=0; d<365; d++) {
-            if (array[i][d] < 0) {
+            if (array(i,d) < 0) {
                 throw ExceptionValueLT0_array2Dng365__n_day("check_array2Dng365_double_LT0: value less than zero 0 first at cell index (e.g. gcrc) & day (1-365): ", i, d+1);
             }
         }
@@ -336,7 +336,7 @@ void check_array2Dng365_double_LT0(double array[ng][365]) {
 void check_array2Dng365_double_NaN(double array[ng][365]) {
     for (long i=0; i<ng; i++) {
         for (long d=0; d<365; d++) {
-            if (array[i][d] != array[i][d]) {
+            if (array(i,d) != array(i,d)) {
                 throw ExceptionValueNaN_array2Dng365__n_day("check_array2Dng365_double_NaN: 2D array value NaN first at cell index (e.g. gcrc) & day (1-365): ", i, d+1);
             }
         }
@@ -352,10 +352,10 @@ void list_array2Dng12_double_LT0__strgmsg(double array[ng][12], string const &s)
         for (long m=0; m<11; m++) {
             // check
 //            if (500 == i && 9 == m) {
-//                cout << "i: " << i << " m: " << m << " array[i][m]: " << array[i][m] << endl;
+//                cout << "i: " << i << " m: " << m << " array(i,m): " << array(i,m) << endl;
 //            }
-            if (array[i][m] < 0) {
-                cout << s << " - value less than zero 0: cell index " << i << " month m+1 (1-12): " << m+1 << " array[i][m]: " << array[i][m] << endl;
+            if (array(i,m) < 0) {
+                cout << s << " - value less than zero 0: cell index " << i << " month m+1 (1-12): " << m+1 << " array(i,m): " << array(i,m) << endl;
             }
         }
     }
@@ -367,10 +367,10 @@ void list_array2Dng365_double_LT0__strgmsg(double array[ng][365], string const &
         for (long d=0; d<365; d++) {
             // check
 //            if (500 == i && 302 == d) {
-//                cout << "i: " << i << " d: " << d << " array[i][d]: " << array[i][d] << endl;
+//                cout << "i: " << i << " d: " << d << " array(i,d): " << array(i,d) << endl;
 //            }
-            if (array[i][d] < 0) {
-                cout << s << " - value less than zero 0: cell index " << i << " day d+1 (1-365): " << d+1 << " array[i][d]: " << array[i][d] << endl;
+            if (array(i,d) < 0) {
+                cout << s << " - value less than zero 0: cell index " << i << " day d+1 (1-365): " << d+1 << " array(i,d): " << array(i,d) << endl;
             }
         }
     }
@@ -384,10 +384,10 @@ void list_array2Dng12_double_NaN__strgmsg(double array[ng][12], string const &s)
         for (long m=0; m<11; m++) {
             // check
 //            if (500 == i && 9 == m) {
-//                cout << "i: " << i << " m: " << m << " array[i][m]: " << array[i][m] << endl;
+//                cout << "i: " << i << " m: " << m << " array(i,m): " << array(i,m) << endl;
 //            }
-            if (array[i][m] != array[i][m]) {
-                cout << s << " - value NaN: cell index " << i << " month m+1 (1-12): " << m+1 << " array[i][m]: " << array[i][m] << endl;
+            if (array(i,m) != array(i,m)) {
+                cout << s << " - value NaN: cell index " << i << " month m+1 (1-12): " << m+1 << " array(i,m): " << array(i,m) << endl;
             }
         }
     }
@@ -399,10 +399,10 @@ void list_array2Dng365_double_NaN__strgmsg(double array[ng][365], string const &
         for (long d=0; d<365; d++) {
             // check
 //            if (500 == i && 302 == d) {
-//                cout << "i: " << i << " d: " << d << " array[i][d]: " << array[i][d] << endl;
+//                cout << "i: " << i << " d: " << d << " array(i,d): " << array(i,d) << endl;
 //            }
-            if (array[i][d] != array[i][d]) {
-                cout << s << " - value NaN: cell index " << i << " day d+1 (1-365): " << d+1 << " array[i][d]: " << array[i][d] << endl;
+            if (array(i,d) != array(i,d)) {
+                cout << s << " - value NaN: cell index " << i << " day d+1 (1-365): " << d+1 << " array(i,d): " << array(i,d) << endl;
             }
         }
     }

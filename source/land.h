@@ -5,21 +5,23 @@
 *
 ***********************************************************************/
 #include "def.h"
+#include "grid.h"
+#include <string>
 
 class landClass {
   public:
-	void init(const char *input_dir);
-	void initPM(const char *input_dir);
-	void readLandCoverMap(int actual_year, const char *land_cover_dir);
+	void init(const std::string input_dir);
+	void initPM(const std::string input_dir);
+	void readLandCoverMap(int actual_year, const std::string land_cover_dir);
 
-        //float G_built_up[ng_land];
-        float G_built_up[ng];
-// not used any more in WG2.2	
-	char G_potVegetation[ng];
-// not used any more in WG2.2	
-	char G_landCover[ng];
-        //char G_landCover22[ng_land];
-        char G_landCover22[ng];
+        Grid<float> G_built_up;
+	// not used any more in WG2.2
 
-	short *G_altitude;	// only for Penman-Monteith (option: 2)
+	Grid<char> G_potVegetation;
+	// not used any more in WG2.2
+
+	Grid<char> G_landCover;
+        Grid<char> G_landCover22;
+
+	Grid<short> G_altitude;	// only for Penman-Monteith (option: 2)
 };

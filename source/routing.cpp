@@ -85,78 +85,50 @@
 #include <cstdio>
 #include <cmath>
 #include <cassert>
-#include <fstream>
-#include <iomanip>
-#include <vector>
-
-#include "daily.h"
-#include "calib_basins.h"
-#include "upstream_stations.h"
-#include "option.h"
-#include "gridio.h"
-#include "geo.h"
 #include "timestring.h"
 #include "def.h"
-#include "calibration.h"
-#include "routing.h"
+
+#include "common.h"
+#include "globals.h"
+#include "calib_param.h"
 
 using namespace std;
 
-extern optionClass options;
-extern gridioClass gridIO;
-extern geoClass geo;
-extern cbasinClass cbasin;
-// FP20161018N002 Reservoir operation start years
-extern dailyWaterBalanceClass dailyWaterBalance;
 
-// #######################################
-// Cell-specific calibration parameters
-// FP
-#include "calib_param.h"
 
-extern calibParamClass calibParam; // JSON object and methods from watergap.cpp
-// #######################################
-extern calibGammaClass calibGamma;
 // Conversion factors  // FP
 #include "conversion.h"
 
+#include "calcWaterTemp.h"
 
-const unsigned char numberOfDaysInMonth[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+calcWaterTempClass cwt;
+
+
+const int numberOfDaysInMonth[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 
 template<class T>
 inline int round(const T value) {
     return (int) floor(value + 0.5);
 }
-
 // Definitions for global checks (all grid cells):
 // use of extern variables (chk_year, chk_month, chk_day_in_month), classes/functions, exceptions
 // Felix Portmann 2015
 #ifdef _WATERGAP_CHECKS_GLOBAL_H
 #include "routing_checks_global.h"
 #endif
-
 routingClass::routingClass() {
     defaultRiverVelocity = 86.4; // [km/d] = 1 m/s
     defaultTimeStepsPerDay = 1;
 }
-// end routingClass
 
 void routingClass::setParameters() {
-//	lakeDepth = 0.005; // [km]  // OBSOLETE now read from calibration parameter file // FP
-//	wetlandDepth = 0.002; // [km]  // OBSOLETE now read from calibration parameter file // FP
     lakeOutflowExp = 1.5;
     wetlOutflowExp = 2.5;
-//	k_g = 0.01;	// for groundwater storage	// [1/d]  // OBSOLETE now read from calibration parameter file // FP
-//calibParam.getValue(P_SWOUTF_C,n)
-//	glo_storageFactor = 0.0125;  // [1/d]  // ADAPT to new value 0.01 for comparison of outputs! // OBSOLETE now read from calibration parameter file // FP
-//	loc_storageFactor = 0.01;    // [1/d]  // OBSOLETE now read from calibration parameter file // FP
-
     evapoReductionExp = 3.32193;
     evapoReductionExpReservoir = 2.81383;
 }
-// end setParameters
 
-void routingClass::init(const short nBasins) {
+void routingClass::init(const short nBasins, ConfigFile configFile, WghmStateFile &wghmState, AdditionalOutputInputFile &additionalOutIn) {
     // - reads the files with routing parameters and
     //   grids with lake and wetland locations
     // - calculates land area fraction
@@ -170,17 +142,17 @@ void routingClass::init(const short nBasins) {
     if (0 != ng_glolakcells) {
         for (int n = 0; n < ng_glolakcells; n++) {
             big_lakes_area_frac[n] = 0.0;
-            big_lakes_cells[0][n] = -99;
-            big_lakes_cells[1][n] = -99;
+            big_lakes_cells(0,n) = -99;
+            big_lakes_cells(1,n) = -99;
         }
-        sprintf(filename, "%s/wg_big_lakes_area_frac.txt", options.input_dir);
+        sprintf(filename, "%s/wg_big_lakes_area_frac.txt", options.input_dir.c_str());
         ifstream biglakefile(filename);
         if (biglakefile) {
             int n = 0;
             // float data; // FP20161018N002 Reservoir operation start years: uncomment unused variable
             while (biglakefile && (n < ng_glolakcells)) {
-                biglakefile >> big_lakes_cells[0][n];
-                biglakefile >> big_lakes_cells[1][n];
+                biglakefile >> big_lakes_cells(0,n);
+                biglakefile >> big_lakes_cells(1,n);
                 biglakefile >> big_lakes_area_frac[n];
                 n++;
             }
@@ -197,12 +169,45 @@ void routingClass::init(const short nBasins) {
 
     setParameters();
 
+    if (options.calc_wtemp == 1 || options.calc_wtemp == 2) {
+        // Initialize Temporary Storage to hold Temperatures and Inflowvolumes from previous day to starttemp. 15 degC
+        G_RiverWTempPreStep.fill(15.);
+        G_RiverAvailPreStep.fill(0.);
+        G_locLakeTempPrevStep.fill(15.);
+        G_locWetlTempPrevStep.fill(15.);
+        G_gloLakeTempPrevStep.fill(15.);
+        G_reservoirTempPrevStep.fill(15.);
+        G_gloWetlandTempPrevStep.fill(15.);
+        SumWaterTempRiver.fill(0.);
+        NumWaterTempRiver.fill(0.);
+        SumWaterTempLocLake.fill(0.);
+        NumWaterTempLocLake.fill(0.);
+        SumWaterTempLocWetl.fill(0.);
+        NumWaterTempLocWetl.fill(0.);
+        SumWaterTempGloLake.fill(0.);
+        NumWaterTempGloLake.fill(0.);
+        SumWaterTempReservoir.fill(0.);
+        NumWaterTempReservoir.fill(0.);
+        SumWaterTempGloWetl.fill(0.);
+        NumWaterTempGloWetl.fill(0.);
+        G_iceThicknesslocLake.fill(0.);
+        G_iceThicknesslocWetland.fill(0.);
+        G_iceThicknessGloLake.fill(0.);
+        G_iceThicknessReservoir.fill(0.);
+        G_iceThicknessGloWetland.fill(0.);
+        G_iceThicknessRiver.fill(0.);
+        // read in all inflow cells for every cell for temperature computation
+        G_inflow_cells.read(options.routing_dir + "/G_INFLC.9.UNF4");
+    }
+
     // read parameters from ROUTING.DAT
     double v = defaultRiverVelocity;
     short s = defaultTimeStepsPerDay;
 
     try {
-        sprintf(filename, "ROUTING.DAT");
+        // sprintf(filename, "ROUTING.DAT");
+        // AEMS: new code:
+        sprintf(filename, configFile.routingoptionsfile.c_str());
         ifstream routingOptionFile(filename);
 
         if (!routingOptionFile) {
@@ -244,28 +249,23 @@ void routingClass::init(const short nBasins) {
     // and remove nodata values
 
     // fractions of grid cell area
-    sprintf(filename, "%s/G_GLOLAK.UNF0", options.input_dir); // FP20161018N002 Global lakes WITHOUT regulated lakes
-    gridIO.readUnfFile(filename, ng, &G_glo_lake[0]);
-    sprintf(filename, "%s/G_LOCLAK.UNF0", options.input_dir);
-    gridIO.readUnfFile(filename, ng, &G_loc_lake[0]);
-    sprintf(filename, "%s/G_GLOWET.UNF0", options.input_dir);
-    gridIO.readUnfFile(filename, ng, &G_glo_wetland[0]);
-    sprintf(filename, "%s/G_LOCWET.UNF0", options.input_dir);
-    gridIO.readUnfFile(filename, ng, &G_loc_wetland[0]);
+    G_glo_lake.read(options.input_dir + "/G_GLOLAK.UNF0");
+    G_loc_lake.read(options.input_dir + "/G_LOCLAK.UNF0");
+    G_glo_wetland.read(options.input_dir + "/G_GLOWET.UNF0");
+    G_loc_wetland.read(options.input_dir + "/G_LOCWET.UNF0");
+
     // FP20161018N002 Reservoir operation start years
     // read all areas in km2 into arrays of data type double
-    sprintf(filename, "%s/G_LAKAREA.UNF0", options.input_dir);
-    gridIO.readUnfFile(filename, ng, &G_lake_area[0]);
-    sprintf(filename, "%s/G_RESAREA.UNF0", options.input_dir);
-    gridIO.readUnfFile(filename, ng,
-                       &G_reservoir_area_full[0]);  // reservoir AND regulated lake areas when all reservoirs/reg.lakes are in operation
+    G_lake_area.read(options.input_dir + "/G_LAKAREA.UNF0");
+
+    // reservoir AND regulated lake areas when all reservoirs/reg.lakes are in operation
+    G_reservoir_area_full.read(options.input_dir + "/G_RESAREA.UNF0");
+
     // fraction of grid cell area
-    sprintf(filename, "%s/G_REGLAKE.UNF0",
-            options.input_dir);  // regulated lake fraction when all reg.lakes are in operation
-    gridIO.readUnfFile(filename, ng, &G_reg_lake[0]);
+    G_reg_lake.read(options.input_dir + "/G_REGLAKE.UNF0");
+
     //read regulated lake status (1 == lake is regulated lake), area included in G_RESAREA.UNF0
-    sprintf(filename, "%s/G_REG_LAKE.UNF1", options.input_dir);
-    gridIO.readUnfFile(filename, ng, &G_reg_lake_status[0]); //char
+    G_reg_lake_status.read(options.input_dir + "/G_REG_LAKE.UNF1");
 
     // and remove nodata values
     for (int n = 0; n < ng; n++) {
@@ -277,7 +277,6 @@ void routingClass::init(const short nBasins) {
         if (G_lake_area[n] < 0.) G_lake_area[n] = 0.;
         // FP20161018N002 Reservoir operation start years
         if (G_reservoir_area_full[n] < 0.) G_reservoir_area_full[n] = 0.;
-        //G_reservoir_area[n] = 0;
         if (G_reg_lake[n] < 0.) G_reg_lake[n] = 0.;
 
         // initial values for fractions
@@ -285,56 +284,25 @@ void routingClass::init(const short nBasins) {
         // (2) land areas (including wetlands)
         G_fwaterfreq[n] = 0.;
         G_landfreq[n] = 0.;
-
-        // HMS 20170202 this should be done for each run during a calibration and not only once.
-        // therefore it is moved to routing.initFractionStatus.
-        /*// initialize G_fswb and related fractions
-            G_fLocLake[n] = G_loc_lake[n] / 100.;
-            G_fLocWet[n] = G_loc_wetland[n] / 100.;
-            G_fGloLake[n] = G_glo_lake[n] / 100.; // do not adapt at all, just for output purposes
-            //G_fGloLakeOutflowCell[n] =  (double)G_lake_area[n] / (geo.areaOfCellByArrayPos(n)); // can reach values > 1 due to relocalization into outflow cell.
-            //G_fGloResOutflowCell[n] = (double)G_reservoir_area[n] / (geo.areaOfCellByArrayPos(n)); // can reach values > 1 due to relocalization into outflow cell.
-            G_fGloWet[n] = G_glo_wetland[n] / 100.;
-
-            //G_fswbInit[n] = G_fLocLake[n] + G_fLocWet[n] + G_fGloLakeOutflowCell[n] + G_fGloResOutflowCell[n] + G_fGloWet[n]; // for output purposes
-            G_fswbInit[n] = G_fLocLake[n] + G_fLocWet[n] + G_fGloWet[n]; // for output purposes and for specifying catchment area (for fractional routing), outflow cells are not considered anymore
-            G_fswbLandAreaFrac[n] = G_fswbInit[n]; // for changing LandAreaFrac only
-            G_fswbLandAreaFracNextTimestep[n] = G_fswbLandAreaFrac[n];  // initialize for first time step
-*/
-        //define status at first occurrence / start = 0:
-        // statusStarted_landAreaFracNextTimestep[n] = 0; //obsolete as covered in initFractionStatus
-        // statusStarted_landfreq_fwaterfreq_landAreaFrac[n] = 0; //obsolete as covered in initFractionStatus
-
     }
-    // end loop over grid cells
 
     // GLWDunit pattern with index to outflow grid cell Image22-Number (n = Image22nr - 1)
-    sprintf(filename, "%s/G_OUTFLOW_CELL_ASSIGNMENT.UNF4", options.input_dir);
-    gridIO.readUnfFile(filename, ng, &G_outflow_cell_assignment[0]); //int or short
+    G_outflow_cell_assignment.read(options.input_dir + "/G_OUTFLOW_CELL_ASSIGNMENT.UNF4");
 
 
     // read cell number of downstream cell;
     // added for new use_allocation algorithm, M.Hunger 2/2006,
     // and also for the routing algorithm (F.Voss 4/2008)
-    sprintf(filename, "%s/G_OUTFLC.UNF4", options.routing_dir);
-    gridIO.readUnfFile(filename, ng, G_downstreamCell);
-
-    // new reservoir algorithm start
-
-    // FP20161018N002 Reservoir operation start years
+    G_downstreamCell.read(options.routing_dir + "/G_OUTFLC.UNF4");
 
     //define status at model start / first occurence, e.g. when reading for annual reservoir fraction arrays
     // statusStarted_updateGloResPrevYear = 0; //obsolete as covered in initFractionStatus
 
-
-
-
     // Status of algorithm depends on
     // whether naturalized runs are performed or whether reservoirs (incl. regulated lakes) are to be used
     if (options.antNatOpt == 0) { // anthropogenic runs: consider reservoirs and regulated lakes as reservoirs
-        cout
-                       << "routing.init: if options.antNatOpt == 0, anthropogenic run: consider reservoirs and regulated lakes as reservoirs"
-                       << endl;
+        cout << "routing.init: if options.antNatOpt == 0, anthropogenic run:"
+             << " consider reservoirs and regulated lakes as reservoirs" << endl;
 
         //select reservoir algorithm yes/no
 
@@ -344,65 +312,53 @@ void routingClass::init(const short nBasins) {
         // Calculate here, otherwise, areas would be added each year.
 
         // Anthropogenic run
-        //read files which do not change in time
+        // read files which do not change in time
         // Use reservoir algorithm for reservoirs/reg.lakes
+
+
         if (options.resOpt == 1) {
-            cout << "routing.init: if options.resOpt == 1, initialze new reservoir algorithm" << endl;
+            cout << "routing.init: if options.resOpt == 1, initialize new reservoir algorithm" << endl;
 
-            // Dynamic arrays are deleted in destructor class ~routingClass()
-            G_gloResStorage = new double[ng];
-            G_res_type = new char[ng];
-            G_start_month = new char[ng];
-            G_mean_outflow = new double[ng];
-            // FP20161018N002 Reservoir operation start years
-            // G_res_start_year & G_stor_cap_full (instead G_stor_cap)
-            G_res_start_year = new int[ng];
-            G_stor_cap_full = new double[ng];
+            //reading in and adding local reservoirs to loc lakes(reservoirs below the
+            // threshold of 0.5 km3 reservoir volume)
+            G_loc_res.read(options.input_dir + "/G_LOCRES.UNF0");
+            G_loc_lake+=G_loc_res;
 
-            G_mean_demand = new double[ng];
-            G_mean_cons_use = new double[ng];
-            G_alloc_coeff = new double[ng][reservoir_dsc];
-            K_release = new double[ng];
-            annual_release = new double[ng];
-
-            //read reservoir_type
-            sprintf(filename, "%s/G_RES_TYPE.UNF1", options.input_dir);
-            gridIO.readUnfFile(filename, ng, &G_res_type[0]); //char
+            // read reservoir_type (char)
+            G_res_type.read(options.input_dir + "/G_RES_TYPE.UNF1");
 
             // FP20161018N002 Reservoir operation start years
-            //read reservoir operation start year
-            sprintf(filename, "%s/G_START_YEAR.UNF4", options.input_dir);
-            gridIO.readUnfFile(filename, ng, &G_res_start_year[0]); //int
+            // read reservoir operation start year (int)
+            G_res_start_year.read(options.input_dir + "/G_START_YEAR.UNF4");
 
-            //read file -> start month of operational year
-            sprintf(filename, "%s/G_START_MONTH.UNF1", options.routing_dir);
-            gridIO.readUnfFile(filename, ng, &G_start_month[0]);//char
+            // read file -> start month of operational year (char)
+            G_start_month.read(options.routing_dir + "/G_START_MONTH.UNF1");
 
-            //read mean annual outflow of reservoirs (long term mean [km3/month], calculated from G_RIVER_AVAIL), was G_MEAN_INFLOW before but is in fact inflow to reservoir plus P-PET of reservoir
-            sprintf(filename, "%s/G_MEAN_OUTFLOW.UNF0", options.input_dir);
-            gridIO.readUnfFile(filename, ng, &G_mean_outflow[0]);
+            // read mean annual outflow of reservoirs (long term mean [km3/month], calculated from G_RIVER_AVAIL),
+            // was G_MEAN_INFLOW before but is in fact inflow to reservoir plus P-PET of reservoir
+            G_mean_outflow.read(options.input_dir + "/G_MEAN_OUTFLOW.UNF0");
 
-            //read file -> reservoir volume from published data (GLWD1), storage capacity [km3]
-            sprintf(filename, "%s/G_STORAGE_CAPACITY.UNF0", options.input_dir);
-            gridIO.readUnfFile(filename, ng, &G_stor_cap_full[0]); // FP20161018N002 Reservoir operation start years
+            // read file -> reservoir volume from published data (GLWD1), storage capacity [km3]
+            // FP20161018N002 Reservoir operation start years
+            G_stor_cap_full.read(options.input_dir + "/G_STORAGE_CAPACITY.UNF0");
 
-            //read file -> mean annual net use of surface water per cell (e.g. mean value of 1971 to 2000)
+            // read file -> mean annual net use of surface water per cell (e.g. mean value of 1971 to 2000)
             // net use is given in m3/yr
             // FP20161018N002 Reservoir operation start years:
             // Specify name with averaging period of full year start and end in options
-            sprintf(filename, "%s/G_NUs_%d_%d.UNF0", options.input_dir, options.resNUsMeanYearFirst,
-                    options.resNUsMeanYearLast); // e.g. G_NUs_7100.UNF0
-            gridIO.readUnfFile(filename, ng, &G_mean_NUs[0]);
+            // e.g. G_NUs_7100.UNF0
+            G_mean_NUs.read(options.input_dir + "/G_NUs_"
+                + std::to_string(options.resNUsMeanYearFirst) + "_"
+                + std::to_string(options.resNUsMeanYearLast) + ".UNF0");
 
-            //read file -> allocation coefficient
-            sprintf(filename, "%s/G_ALLOC_COEFF.%d.UNF0", options.routing_dir, reservoir_dsc); // is 5
-            gridIO.readUnfFile(filename, ng * reservoir_dsc, &G_alloc_coeff[0][0]);
+            G_alloc_coeff.read(options.routing_dir + "/G_ALLOC_COEFF."
+                + std::to_string(reservoir_dsc) + ".UNF0");
 
                 // FP20161018N002 Reservoir operation start years:
                 // Remark: Calculate this only once (1x)
                 // Change in code: G_reservoir_area_full instead G_reservoir_area
                 // Use all reservoirs and regulated lakes
-                //calculate MEAN demand of downstream area
+            // calculate MEAN demand of downstream area
                 for (int n = 0; n < ng; n++) {
                     G_mean_demand[n] = 0; //init
                     G_mean_demand[n] += G_mean_NUs[n]; //water demand of cell itself
@@ -415,23 +371,26 @@ void routingClass::init(const short nBasins) {
                 while (i < reservoir_dsc && downstreamCell > 0
                        && G_reservoir_area_full[downstreamCell] <= 0) {
                     //add demand of downstream cells, m3/yr
-                    G_mean_demand[n] += G_mean_NUs[downstreamCell - 1] * G_alloc_coeff[n][i++];
+                    G_mean_demand[n] += G_mean_NUs[downstreamCell - 1] * G_alloc_coeff(n,i++);
 
                     // next downstream cell
                     downstreamCell = G_downstreamCell[downstreamCell - 1];
                 }
-                // end while loop
             }
-            // end loop over grid cells
 
-            // FP20161018N002 Reservoir operation start years
             // Remark: Calculate this only once (1x)
             // Change in code: G_stor_cap_full instead G_stor_cap
             // Calculate G_mean_outflow[n] & G_mean_demand[n]
             for (int n = 0; n < ng; n++) {
                 if (G_stor_cap_full[n] < 0.)
                     G_stor_cap_full[n] = 0.;
-                K_release[n] = 0.1; //HMS 2015-03-02 Experience from ISIMIP, leads to a reduction of initial outflow before start month is reached
+                //AEMS
+                if (additionalOutIn.additionalfilestatus == 0) {
+                    K_release[n] = 0.1; //HMS 2015-03-02 Experience from ISIMIP, leads to a reduction of initial outflow before start month is reached
+                }
+                else { // when it should be read from file
+                    K_release[n] = additionalOutIn.additionalOutputInput(n,5);
+                }
 
                 // FP20161018N002 Reservoir operation start years
                 // No change in code, only 2 remarks:
@@ -440,46 +399,39 @@ void routingClass::init(const short nBasins) {
                 // G_mean_outflow is long term mean annual value ([km3/month]); required number is mean annual value
                 G_mean_outflow[n] = G_mean_outflow[n] * 12. * 1000000000. /
                                     31536000.; // 31536000=(365 * 24 * 60 * 60); //km3/month -> km3/yr -> m3/s
-                //G_mean_demand[n] = G_mean_demand[n] * 1000000000. / 31536000.; // 31536000=(365 * 24 * 60 * 60); //km3/yr -> m3/s
                 G_mean_demand[n] = G_mean_demand[n] /
                                    31536000.; // 31536000=(365 * 24 * 60 * 60); //km3/yr -> m3/s // G_mean_demand is in m�/yr as G_NUs_6190 is in km�/yr
             }
-            // end loop over grid cells
 
         }
             // endif (options.resOpt == 1)
             // FP20161018N002 Reservoir operation start years
             // Anthropogenic run
-            // Reservoir algorithm is not used, reservoirs and regulated lakes are handled as global lakes
-        else if (options.resOpt == 0) { // reservoirs = lakes
+            // Reservoirs are not considered, regulated lakes are handled as global lakes
+        else if (options.resOpt == 0) {
             cout
-                           << "routing.init: else if options.resOpt == 0, reservoirs and regulated lakes are handled as global lakes"
+                           << "routing.init: else if options.resOpt == 0, regulated lakes are handled as global lakes"
                            << endl;
 
-            // If reservoir algorithm option is switched off, read in reservoir fraction (in percent) from reference year,
-            // e.g. when all reservoirs are in operation
-            // Preprocessing needed: Copy e.g. the last year G_RES_2014.UNF0 (ISIMIP21a: G_RES_2012.UNF0)
-            sprintf(filename, "%s/G_RES/G_RES_FRAC.UNF0", options.input_dir);
-            gridIO.readUnfFile(filename, ng, &G_glo_res[0]);
 
             for (int n = 0; n < ng; n++) {
                 // treat area
-                // for regulated lakes and reservoirs (in G_reservoir_area_full[n]), add area to lake area
-                if (G_reservoir_area_full[n] > 0.) {
-                    G_lake_area[n] += G_reservoir_area_full[n]; //add reservoir area to lake area
-                    G_reservoir_area_full[n] = 0.; //set area to zero (inhibits further accounting elsewhere)
+                // for regulated lakes (in G_reservoir_area_full[n]), add area to lake area
+                if (G_reg_lake_status[n] == 1) {
+                    if (G_reservoir_area_full[n] > 0.) {
+                        G_lake_area[n] += G_reservoir_area_full[n]; //add reservoir area to lake area in case of regulated lake
+                        G_reservoir_area_full[n] = 0.; //set area to zero (inhibits further accounting elsewhere)
+                    }
                 }
                 // treat land cover fractions
-                //G_glo_lake[n] += G_reg_lake[n]; // add reg_lake fraction to glo_lake fraction // not needed, as G_glo_res includes G_reg_lake
+                G_glo_lake[n] += G_reg_lake[n]; // add regulated lake fraction to glo_lake fraction
                 G_reg_lake[n] = 0.;  //set fraction to zero (inhibits further accounting elsewhere)
-                G_glo_lake[n] += G_glo_res[n]; // add reservoir & regulated lake fraction to glo_lake fraction
-                G_glo_res[n] = 0.;  //set fraction to zero (inhibits further accounting elsewhere)
-                G_glores_prevyear[n] = 0.;  //set fraction to zero (inhibits further accounting elsewhere)
+                // set reservoir fraction to zero
+                G_glo_res[n] = 0.;
+                G_glores_prevyear[n] = 0.;
             }
-            // end loop over grid cells
         }
-        // end if (options.resOpt == 0)
-    } // end if (options.antNatOpt == 0)
+    }
     if ((options.antNatOpt == 1) && (options.resOpt ==1)){
         cout << "Since options.antNatOpt ==1, options.resOpt cannot be 1: using options.resOpt ==1" << endl;
         options.resOpt = 0;
@@ -500,12 +452,10 @@ void routingClass::init(const short nBasins) {
                 G_reservoir_area_full[n] = 0.; //set area to zero (inhibits further accounting elsewhere)  // new FP vs. ISIMIP of HMS
             }
         }
-        // end loop over grid cells
 
     }
-    // end else if (options.antNatOpt == 1)
 
-    // FP20161018N002 Reservoir operation start years
+    // Reservoir operation start years
     // Counting number of reservoirs and regulated lakes
     long count = 0;
     for (int n = 0; n < ng; n++) {
@@ -513,64 +463,31 @@ void routingClass::init(const short nBasins) {
     }
     cout << "routing.init: nr. of reservoirs/regulated lakes detected (area > 0)  : " << count << endl;
 
-    //new reservoir algorithm end
 
     // set correction factor for upstream locations to 1 (= no correction) use statcorrOpt == 1 during calibration runs (here, station correction should occur). During normal runs, this line should be normally 0 (runs without station correction).
     if (1 == options.statcorrOpt) {
-        for (int n = 0; n < ng; n++)
-            G_statCorrFact[n] = 1.;
+        G_statCorrFact.fill(1.0);
     }
 
-    //before calculating landareaFrac, initial riverFrac needs to be calculated, based on bankfull flow and default flow velocity.
+    // before calculating landareaFrac, initial riverFrac needs to be calculated, based on bankfull flow and default flow velocity.
 
     // read stretch length for each river segment
     // (added for new routing-algorithm, F.Voss 4/2008)
-    sprintf(filename, "%s/G_RIVER_LENGTH.UNF0", options.routing_dir);
-    gridIO.readUnfFile(filename, ng, G_riverLength);
-
-#ifdef _WATERGAP_CHECKS_GLOBAL_H
-                                                                                                                            // Check Felix Portmann 2015 - for invalid data
-            double limit_zero_RiverLength = 0.00000000000000001;
-            long n_cells_zero__file = 0;
-            long n_cells_zero__transformed = 0;
-            printf("Check for G_riverLength[n] < %e , i.e. zero\n", limit_zero_RiverLength);
-            cout << "(1) as read from from file (if any, possibly none)" << filename << endl;
-            for (int n = 0; n < ng; n++) {
-                if (G_riverLength[n] < limit_zero_RiverLength) {
-                    printf("G_riverLength[n] zero %e, geo.G_contcell[n] %d, at grid cell n: %d, geo.G_landfreq[n]: %e, geo.G_fwaterfreq[n]: %e \n", G_riverLength[n], geo.G_contcell[n], n, geo.G_landfreq[n], geo.G_fwaterfreq[n]);
-                    n_cells_zero__file += 1;
-                }
-            }
-            printf("(Data read from file) Number of cells with zero percentage of continental area: %d, limit %e\n", n_cells_zero__file, limit_zero_RiverLength);
-#endif
+    G_riverLength.read(options.routing_dir + "/G_RIVER_LENGTH.UNF0");
+    G_riverLengthCheck.read(options.routing_dir + "/G_RIVER_LENGTH.UNF0");
 
     // Introduced in WG22b: Reduce river length in coastal cells in proportion to continental area fraction:
     for (int n = 0; n < ng; n++) {
         G_riverLength[n] *= geo.G_contfreq[n] / 100.;
     }
 
-#ifdef _WATERGAP_CHECKS_GLOBAL_H
-                                                                                                                            // Check Felix Portmann 2015 - for invalid data
-            cout << "(2) WG22b reduced G_riverLength[n] 'in coastal cells'" << endl;
-            for (int n = 0; n < ng; n++) {
-                if (G_riverLength[n] < limit_zero_RiverLength) {
-                    printf("G_riverLength[n] zero %e, geo.G_contcell[n] %d, at grid cell n: %d, geo.G_landfreq[n]: %e, geo.G_fwaterfreq[n]: %e \n", G_riverLength[n], geo.G_contcell[n], n, geo.G_landfreq[n], geo.G_fwaterfreq[n]);
-                    n_cells_zero__transformed += 1;
-                }
-            }
-            printf("(Transformed data) Number of cells with zero percentage of continental area: %d, limit %e\n", n_cells_zero__transformed, limit_zero_RiverLength);
-#endif
-
     // velocity -------------------------------------------------------
-    //if (options.riverveloOpt == 1) {
-    sprintf(filename, "%s/G_RIVERSLOPE.UNF0", options.routing_dir);
-    gridIO.readUnfFile(filename, ng, G_RiverSlope);
 
-    sprintf(filename, "%s/G_ROUGHNESS.UNF0", options.input_dir);
-    gridIO.readUnfFile(filename, ng, G_Roughness);
+    G_RiverSlope.read(options.routing_dir + "/G_RIVERSLOPE.UNF0");
 
-    sprintf(filename, "%s/G_BANKFULL.UNF0", options.input_dir);
-    gridIO.readUnfFile(filename, ng, G_bankfull_flow); //[m/sec]
+    G_Roughness.read(options.input_dir + "/G_ROUGHNESS.UNF0");
+
+    G_bankfull_flow.read(options.input_dir + "/G_BANKFULL.UNF0");  //[m/sec]
 
     for (int n = 0; n < ng; n++) {
         // to avoid negative bottom width
@@ -588,103 +505,44 @@ void routingClass::init(const short nBasins) {
         G_riverAreaFrac[n] = 0.;
 
     }
-    //}
-    // End velocity
-
-    // FP20161018N002 Reservoir operation start years:
-    // G_landAreaFrac[n] and G_landWaterExclGloLakAreaFrac[n] now calculated in routing.annualInit
 
     // set initialization of G_landAreaFracNextTimestep to -99 for the first model day
     // to calculate new special value at the end of the first model day
-    for (int n = 0; n < ng; n++) {
-        G_landAreaFracNextTimestep[n] = -99.0;
-        G_landAreaFracNextTimestep[n] = 0.; // Set to zero to prevent undesired results
-        G_landAreaFrac[n] = 0.; // Set to zero to prevent undesired results
-        G_landAreaFracPrevTimestep[n] = 0.; // Set to zero to prevent undesired results
-    }
-
-    // Superbasin calculation currently obsolete, probably not working correctly in WaterGAP2.2b, do in postprocessing  // FP 2015-10
-    // calculate land area of basins
-//		extern signed short G_sbasin[ng];  // STRANGE: SEEMS NOT TO BE RECOGNIZED by Qtcreator as to be from watergap.cpp)
-//	basinLandArea = new double[nBasins];
-
-//	for (int n = 0; n < nBasins; n++)
-//		basinLandArea[n] = 0.;
-//	for (int n = 0; n < ng; n++) {
-//		if (G_sbasin[n] > 0) {
-//			basinLandArea[G_sbasin[n] - 1] += G_landAreaFrac[n] * geo.areaOfCellByArrayPos(n) / 100.0;
-//		}
-//	}
+    // Set to zero to prevent undesired results
+    G_landAreaFracNextTimestep.fill(0);
+    G_landAreaFrac.fill(0);
+    G_landAreaFracPrevTimestep.fill(0);
 
     // set G_GloLakePrecip and G_ReservoirPrecip to 0
-
-    for (int n = 0; n < ng; n++) {
-        G_GloLakePrecip[n] = 0.;
-        G_ReservoirPrecip[n] = 0.;
-        G_dailyRiverPrecip[n] = 0.;
-    }
+    G_GloLakePrecip.fill(0);
+    G_ReservoirPrecip.fill(0);
+    G_dailyRiverPrecip.fill(0);
 
     // read image numbers of neighbouring cells of each cell
     // (added for new use_allocation algorithm, M.Hunger 2/2006)
     if (options.use_alloc > 0) {
-        sprintf(filename, "%s/G_NEIGHBOUR_CELLS.8.UNF4", options.routing_dir);
-        gridIO.readUnfFile(filename, ng * 8, &G_neighbourCell[0][0]);
+        G_neighbourCell.read(options.routing_dir + "/G_NEIGHBOUR_CELLS.8.UNF4");
     }
 
     // read ordered routing number of each cell
     // and assign array position for ordered routing scheme
     // (added for new routing-algorithm, F.Voss 4/2008)
-    int *G_routOrder;
-    G_routOrder = new int[ng];
-    sprintf(filename, "%s/G_ROUT_ORDER.UNF4", options.routing_dir);
-    gridIO.readUnfFile(filename, ng, G_routOrder);
+    Grid<int> G_routOrder;
+    G_routOrder.read(options.routing_dir + "/G_ROUT_ORDER.UNF4");
+
 #pragma omp parallel for \
         shared(G_routingCell, G_routOrder)
     for (int i = 0; i < ng; ++i)
+    {
         G_routingCell[G_routOrder[i] - 1] = i + 1;
-    delete[] G_routOrder;
-    G_routOrder = NULL;
+    }
 
     // read frgi to adapt NAg if necessary
     if (options.subtract_use > 0) {
-        sprintf(filename, "%s/G_FRACTRETURNGW_IRRIG.UNF0", options.input_dir);
-        gridIO.readUnfFile(filename, ng, G_fractreturngw_irrig);
+        G_fractreturngw_irrig.read(options.input_dir + "/G_FRACTRETURNGW_IRRIG.UNF0");
     }
 
-//	// read stretch length for each river segment
-//	// (added for new routing-algorithm, F.Voss 4/2008)
-//	sprintf(filename, "%s/G_RIVER_LENGTH.UNF0", options.routing_dir);
-//	gridIO.readUnfFile(filename, ng, G_riverLength);
-
-//	// velocity -------------------------------------------------------
-//        //if (options.riverveloOpt == 1) {
-//		sprintf(filename, "%s/G_RIVERSLOPE.UNF0", options.routing_dir);
-//		gridIO.readUnfFile(filename, ng, G_RiverSlope);
-
-//		sprintf(filename, "%s/G_ROUGHNESS.UNF0", options.input_dir);
-//		gridIO.readUnfFile(filename, ng, G_Roughness);
-
-//		sprintf(filename, "%s/G_BANKFULL.UNF0", options.input_dir);
-//		gridIO.readUnfFile(filename, ng, G_bankfull_flow); //[m/sec]
-
-//		for (int n = 0; n < ng; n++) {
-//			// to avoid negative bottom width
-//			if (G_bankfull_flow[n] < 0.05)
-//				G_bankfull_flow[n] = 0.05;
-
-//			G_RiverWidth_bf[n] = 2.71 * pow(G_bankfull_flow[n], 0.557); //[m]
-//			G_RiverDepth_bf[n] = 0.349 * pow(G_bankfull_flow[n], 0.341); //[m]
-//			// calculate river bottom width asssuming a trapezoidal channes with 2/1 run to rise ratio; [m]
-//			G_riverBottomWidth[n] = G_RiverWidth_bf[n] - 2.0 * 2.0 * G_RiverDepth_bf[n];
-//			//CR: G_riverStorageMax[n] is required to compute riverEvapoReductionFactor introduced in WG22b.
-//			G_riverStorageMax[n] = G_riverLength[n] * 0.5 * G_RiverDepth_bf[n]/1000. * (G_riverBottomWidth[n]/1000. + G_RiverWidth_bf[n]/1000.); // [km3]
-//		}
-//        //}
-//	// Ende velocity
-
-    // local drain direction (= flow direction map)
-//	sprintf(filename, "%s/G_LDD_2.UNF1", options.routing_dir);
-//	gridIO.readUnfFile(filename, ng, G_LDD);                        // CR 2015-05-12: required in WG22 (and previous versions) to set 'transportedVolume' to zero
+    G_LDD.read(options.routing_dir + "/G_LDD_2.UNF1");
 
     // number of superbasins varies.
     // therefore size of the arrays is allocated dynamically.
@@ -692,176 +550,194 @@ void routingClass::init(const short nBasins) {
 
     cout << " : ##### routing.init:  nSpecBasins= " << nSpecBasins << endl;
 
-    dailyRiverDischarge = new double[nSpecBasins][365];
+    dailyRiverDischarge.initialize(nSpecBasins);
     // initialize daily storages
     if (options.day_store == 1) {
-        dailyLocLakeStorage = new double[nSpecBasins][365];
-        dailyLocWetlStorage = new double[nSpecBasins][365];
-        dailyGloLakeStorage = new double[nSpecBasins][365];
-        dailyGloWetlStorage = new double[nSpecBasins][365];
-        dailyRiverVelocity = new double[nSpecBasins][365];   //-------------new for daily velocity file------------------
+        dailyLocLakeStorage.initialize(nSpecBasins);
+        dailyLocWetlStorage.initialize(nSpecBasins);
+        dailyGloLakeStorage.initialize(nSpecBasins);
+        dailyGloWetlStorage.initialize(nSpecBasins);
+        dailyRiverVelocity.initialize(nSpecBasins);
         if (options.resOpt == 1)
-            dailyResStorage = new double[nSpecBasins][365];
+            dailyResStorage.initialize(nSpecBasins);
     }
     // endif options.day_store
 
     // initialize monthly storages
     if ((2 == options.grid_store) || (4 == options.grid_store) || (6 == options.grid_store)) {
-        G_monthlyConsistentPrecip = new double[ng][12];
-        G_monthlyCellRunoff = new double[ng][12];
-        G_monthlyCellSurfaceRunoff = new double[ng][12];
-        G_monthlyRiverAvail = new double[ng][12];
-        G_monthlyPotCellRunoff = new double[ng][12];
-        G_monthlyPotCellRunoffDeficit = new double[ng][12];
-        if (options.outRiverInUpstream) G_monthlyRiverInUpstream = new double[ng][12]; // total inflow from upstream
+        G_monthlyConsistentPrecip.initialize();
+        G_monthlyCellRunoff.initialize();
+        G_monthlyCellSurfaceRunoff.initialize();
+        G_monthlyRiverAvail.initialize();
+        G_monthlyPotCellRunoff.initialize();
+        G_monthlyPotCellRunoffDeficit.initialize();
+        G_monthlyGwrunSurfrun.initialize();
 
-        // added for cell AET calculation (2.1f)
-        G_monthlyCellAET = new double[ng][12]; // total cell evap
-        G_monthlyCellAETWCa = new double[ng][12]; // total cell evap plus consumptive water use
-        G_monthlyOpenWaterEvap = new double[ng][12]; // evap from open water bodies
-        G_monthlyVelocity = new double[ng][12]; // velocity grid
-        G_monthlySurfStor = new double[ng][12]; // surface water storage
-        G_monthlySurfStor_mm = new double[ng][12]; // surface water storage [mm]
+        if (options.outRiverInUpstream)
+            G_monthlyRiverInUpstream.initialize(); // total inflow from upstream
 
-        G_monthlyMinRiverAvail = new double[ng][12];
-        G_monthlyMaxRiverAvail = new double[ng][12];
+        // cell AET calculation (since 2.1f)
+        G_monthlyCellAET.initialize();
+        G_monthlyCellAETWCa.initialize();
+        G_monthlyOpenWaterEvap.initialize();
 
-        G_monthlyGwrSwb = new double[ng][12];
-        G_monthlyFswb = new double[ng][12];
-        G_monthlyLandAreaFrac = new double[ng][12];
-        G_monthlyRiverAreaFrac = new double[ng][12];
-        G_monthlyRiverPET = new double[ng][12];
-        G_monthlyGwRunoff = new double[ng][12];
-        G_monthlyLocWetlExtent = new double[ng][12];
-        G_monthlyGloWetlExtent = new double[ng][12];
+        G_monthlyVelocity.initialize(); // velocity grid
+        G_monthlySurfStor.initialize(); // surface water storage
+        G_monthlySurfStor_mm.initialize(); // surface water storage [mm]
+
+        G_monthlyMinRiverAvail.initialize();
+        G_monthlyMaxRiverAvail.initialize();
+
+        if(options.outWaterTempMonthly) G_monthlyMeanWaterTempRiver.initialize();
+        if(options.outWaterTempMonthlyAllSWB){
+            G_monthlyMeanWaterTempLocLake.initialize();
+            G_monthlyMeanWaterTempLocWetl.initialize();
+            G_monthlyMeanWaterTempGloLake.initialize();
+            G_monthlyMeanWaterTempReservoir.initialize();
+            G_monthlyMeanWaterTempGloWetl.initialize();
+        }
+
+        G_monthlyGwrSwb.initialize();
+        G_monthlyFswb.initialize();
+        G_monthlyLandAreaFrac.initialize();
+        G_monthlyRiverAreaFrac.initialize();
+        G_monthlyRiverPET.initialize();
+        G_monthlyGwRunoff.initialize();
+        G_monthlyLocWetlExtent.initialize();
+        G_monthlyGloWetlExtent.initialize();
 
         //define arrays for storage output
         if (options.resOpt == 1) {
-            G_monthlyResStorage = new double[ng][12];
-            G_monthlyResStorageRatio = new double[ng][12];
-            G_monthlyResInflow = new double[ng][12];
-            G_monthlyResOutflow = new double[ng][12];
+            G_monthlyResStorage.initialize();
+            G_monthlyResStorageRatio.initialize();
+            G_monthlyResInflow.initialize();
+            G_monthlyResOutflow.initialize();
         }
-        G_monthlyRiverStorage = new double[ng][12];
-        G_monthlyLocLakeStorage = new double[ng][12];
-        G_monthlyLocWetlStorage = new double[ng][12];
-        G_monthlyGloLakeStorage = new double[ng][12];
-        G_monthlyGloWetlStorage = new double[ng][12];
-        G_monthlySatisfiedUse = new double[ng][12];
-        G_monthlyGwStorage = new double[ng][12];
-        // G_monthlySwStorage		= new double[ng][12]; // not used at the moment, implement if needed
-        G_monthlyActualUse = new double[ng][12];
-        G_monthlyNUg = new double[ng][12];
-        // CR 15-08-19 used for test output
-        G_monthlyAllocatedUse = new double[ng][12]; // FP 2015, not used anymore, at the moment, implement if needed again
-        //KF *** end
-    }
-    // endif options (initialize monthly storages)
 
-    // daily output option 31 start
+        if (options.glacierOpt == 1) {
+            G_monthlyGlacierStorage.initialize();
+            G_monthlyGlacierArea.initialize();
+            G_monthlyGlacierAreaFrac.initialize();
+            G_monthlyGlacierRunoff.initialize();
+            G_monthlyGlacierPrecip.initialize();
+        }
+
+        G_monthlyRiverStorage.initialize();
+        G_monthlyLocLakeStorage.initialize();
+        G_monthlyLocWetlStorage.initialize();
+        G_monthlyGloLakeStorage.initialize();
+        G_monthlyGloWetlStorage.initialize();
+        G_monthlySatisfiedUse.initialize();
+        G_monthlyGwStorage.initialize();
+        G_monthlyActualUse.initialize();
+        G_monthlyNUg.initialize();
+        G_monthlyAllocatedUse.initialize();
+    }
+
     if ((3 == options.grid_store) || (4 == options.grid_store)) {
-        if (options.outPrecDaily) G_daily31ConsistentPrecip = new double[ng][31];
-        if (options.outCellRunoffDaily) G_daily31CellRunoff = new double[ng][31];
-        if (options.outGWRunoffDaily) G_daily31GwRunoff = new double[ng][31];
-        if (options.outCellSurfaceDaily) G_daily31CellSurfaceRunoff = new double[ng][31];
-        if (options.outRiverAvailDaily) G_daily31RiverAvail = new double[ng][31];
-        if (options.outRiverVeloDaily) G_daily31Velocity = new double[ng][31];
-        if (options.outCellAETDaily) G_daily31CellAET = new double[ng][31];
-        if (options.outSurfStorDaily) G_daily31SurfStor = new double[ng][31];
-        if (options.outSingleStoragesDaily) G_daily31LocLakeStor = new double[ng][31];
-        if (options.outSingleStoragesDaily) G_daily31LocWetlStor = new double[ng][31];
-        if (options.outSingleStoragesDaily) G_daily31GloLakeStor = new double[ng][31];
-        if (options.outSingleStoragesDaily) G_daily31GloWetlStor = new double[ng][31];
-        if (options.outSingleStoragesDaily) G_daily31RiverStor = new double[ng][31];
-        if (options.outSingleStoragesDaily) G_daily31ResStor = new double[ng][31];
-        if (options.outSingleStoragesDaily || options.outGWStorageDaily) G_daily31GwStor = new double[ng][31];
+        if (options.outPrecDaily) G_daily31ConsistentPrecip.initialize();
+        if (options.outCellRunoffDaily) G_daily31CellRunoff.initialize();
+        if (options.outGWRunoffDaily) G_daily31GwRunoff.initialize();
+        if (options.outCellSurfaceDaily) G_daily31CellSurfaceRunoff.initialize();
+        if (options.outRiverAvailDaily) G_daily31RiverAvail.initialize();
+        if (options.outRiverVeloDaily) G_daily31Velocity.initialize();
+        if (options.outWaterTempDaily) G_daily31WaterTemp.initialize();
+        if (options.outWaterTempDailyAllSWB) {
+            G_daily31locLakeTemp.initialize();
+            G_daily31locWetlTemp.initialize();
+            G_daily31gloLakeTemp.initialize();
+            G_daily31reservoirTemp.initialize();
+            G_daily31gloWetlandTemp.initialize();
+        }
+        if (options.outCellAETDaily) G_daily31CellAET.initialize();
+        if (options.outSurfStorDaily) G_daily31SurfStor.initialize();
+        if (options.outSingleStoragesDaily) G_daily31LocLakeStor.initialize();
+        if (options.outSingleStoragesDaily) G_daily31LocWetlStor.initialize();
+        if (options.outSingleStoragesDaily) G_daily31GloLakeStor.initialize();
+        if (options.outSingleStoragesDaily) G_daily31GloWetlStor.initialize();
+        if (options.outSingleStoragesDaily) G_daily31RiverStor.initialize();
+        if (options.outSingleStoragesDaily) G_daily31ResStor.initialize();
+        if (options.outSingleStoragesDaily || options.outGWStorageDaily) G_daily31GwStor.initialize();
         if (options.outTotalWaterInStoragesDaily_km3 ||
             options.outTotalWaterInStoragesDaily_mm)
-            G_daily31TotalWaterInStorages_km3 = new double[ng][31];
-        if (options.outTotalWaterInStoragesDaily_mm) G_daily31TotalWaterInStorages_mm = new double[ng][31];
-        if (options.outGwrSwbDaily) G_daily31GwrSwb = new double[ng][31];
-        if (options.outFswbDaily) G_daily31Fswb = new double[ng][31];
-        if (options.outLandAreaFracDaily) G_daily31LandAreaFrac = new double[ng][31];
-        if (options.outGwrunSurfrunDaily) G_daily31GwrunSurfrun = new double[ng][31];
-        if (options.outCellAETWCaDaily) G_daily31CellAETWCa = new double[ng][31];
+            G_daily31TotalWaterInStorages_km3.initialize();
+        if (options.outTotalWaterInStoragesDaily_mm) G_daily31TotalWaterInStorages_mm.initialize();
+        if (options.outGwrSwbDaily) G_daily31GwrSwb.initialize();
+        if (options.outFswbDaily) G_daily31Fswb.initialize();
+        if (options.outLandAreaFracDaily) G_daily31LandAreaFrac.initialize();
+        if (options.outGwrunSurfrunDaily) G_daily31GwrunSurfrun.initialize();
+        if (options.outCellAETWCaDaily) G_daily31CellAETWCa.initialize();
 
     }
-    // endif options (initialize output daily 31 storages)
-    // daily output option 31 end
-    //HMS first and last tws value per year
-    if (options.outTotalWaterInStoragesStartEndDaily_km3) G_startendTotalWaterInStorages_km3 = new double[ng][2];
-    // daily output option 365 start
+
+    if (options.outTotalWaterInStoragesStartEndDaily_km3)
+        G_startendTotalWaterInStorages_km3.initialize();
+
     if ((5 == options.grid_store) || (6 == options.grid_store)) {
 
-//CR #############################################################################################
-//	G_daily365ActualUse				= new double[ng][365];
-//	G_daily365AllocUse				= new double[ng][365];
-//	G_daily365AllocUseNextDay		= new double[ng][365];
-//	G_daily365TotalUnsatUse			= new double[ng][365];
-//	G_daily365UnsatAllocUseNextDay	= new double[ng][365];
-//CR #############################################################################################
-
         if ((options.outPrecDaily) || ((options.scoutcPrecip) && (2 == options.day_store)))
-            G_daily365ConsistentPrecip = new double[ng][365];
+            G_daily365ConsistentPrecip.initialize();
 
         if ((options.outCellRunoffDaily) ||
             (((options.scoutCellRunoffkm3) || (options.scoutCellRunoffmm)) && (2 == options.day_store)))
-            G_daily365CellRunoff = new double[ng][365];
+            G_daily365CellRunoff.initialize();
         if ((options.outCellRunoffDaily) ||
             ((options.scoutCellRunoffmm) && (2 == options.day_store)))
-            G_daily365CellRunoff_mm = new double[ng][365];
+            G_daily365CellRunoff_mm.initialize();
         if ((options.outCellSurfaceDaily) ||
             ((options.scoutCellSRunoff) && (2 == options.day_store)))
-            G_daily365CellSurfaceRunoff = new double[ng][365]; // FP20160915N002
+            G_daily365CellSurfaceRunoff.initialize(); // FP20160915N002
         if ((options.outRiverAvailDaily) || ((options.scoutQ) && (2 == options.day_store)))
-            G_daily365RiverAvail = new double[ng][365];
+            G_daily365RiverAvail.initialize();
         if ((options.outRiverVeloDaily) || ((options.scoutFlowVelo) && (2 == options.day_store)))
-            G_daily365Velocity = new double[ng][365];
+            G_daily365Velocity.initialize();
         if ((options.outGWRunoffDaily) || ((options.scoutGwRunoff) && (2 == options.day_store)))
-            G_daily365GwRunoff = new double[ng][365];
+            G_daily365GwRunoff.initialize();
         if ((options.outLandAreaFracDaily) ||
             ((options.scoutLandAreaFrac) && (2 == options.day_store)))
-            G_daily365LandAreaFrac = new double[ng][365];
+            G_daily365LandAreaFrac.initialize();
         if ((options.outCellAETDaily) || ((options.scoutCellAET) && (2 == options.day_store)))
-            G_daily365CellAET = new double[ng][365];
+            G_daily365CellAET.initialize();
         if ((options.outSurfStorDaily) || ((options.scoutSurfaceStor) && (2 == options.day_store)))
-            G_daily365SurfStor = new double[ng][365];
+            G_daily365SurfStor.initialize();
         if ((options.outSingleStoragesDaily) ||
             ((options.scoutLocLake) && (2 == options.day_store)))
-            G_daily365LocLakeStor = new double[ng][365];
+            G_daily365LocLakeStor.initialize();
         if ((options.outSingleStoragesDaily) ||
             ((options.scoutLocWet) && (2 == options.day_store)))
-            G_daily365LocWetlStor = new double[ng][365];
+            G_daily365LocWetlStor.initialize();
         if ((options.outSingleStoragesDaily) ||
             ((options.scoutGloLake) && (2 == options.day_store)))
-            G_daily365GloLakeStor = new double[ng][365];
+            G_daily365GloLakeStor.initialize();
         if ((options.outSingleStoragesDaily) ||
             ((options.scoutGloWet) && (2 == options.day_store)))
-            G_daily365GloWetlStor = new double[ng][365];
+            G_daily365GloWetlStor.initialize();
         if ((options.outSingleStoragesDaily) || ((options.scoutRiver) && (2 == options.day_store)))
-            G_daily365RiverStor = new double[ng][365];
+            G_daily365RiverStor.initialize();
         if ((options.outSingleStoragesDaily) || ((options.scoutReservoir) && (2 == options.day_store)))
-            G_daily365ResStor = new double[ng][365];
+            G_daily365ResStor.initialize();
         if ((options.outSingleStoragesDaily || options.outGWStorageDaily) ||
             ((options.scoutGwStor) && (2 == options.day_store)))
-            G_daily365GwStor = new double[ng][365];
+            G_daily365GwStor.initialize();
         if ((options.outTotalWaterInStoragesDaily_km3 || options.outTotalWaterInStoragesDaily_mm) ||
             (((options.scoutTWSkm3) || (options.scoutTWSmm)) && (2 == options.day_store)))
-            G_daily365TotalWaterInStorages_km3 = new double[ng][365];
+            G_daily365TotalWaterInStorages_km3.initialize();
         if ((options.outTotalWaterInStoragesDaily_mm) ||
             ((options.scoutTWSmm) && (2 == options.day_store)))
-            G_daily365TotalWaterInStorages_mm = new double[ng][365];
+            G_daily365TotalWaterInStorages_mm.initialize();
         if ((options.outGwrSwbDaily) || ((options.scoutGwrSwb) && (2 == options.day_store)))
-            G_daily365GwrSwb = new double[ng][365];
+            G_daily365GwrSwb.initialize();
         if ((options.outFswbDaily) || ((options.scoutFswb) && (2 == options.day_store)))
-            G_daily365Fswb = new double[ng][365];
-        if (options.outGwrunSurfrunDaily) G_daily365GwrunSurfrun = new double[ng][365];
-        if (options.outCellAETWCaDaily) G_daily365CellAETWCa = new double[ng][365];
+            G_daily365Fswb.initialize();
+        if (options.outGwrunSurfrunDaily) G_daily365GwrunSurfrun.initialize();
+        if (options.outCellAETWCaDaily) G_daily365CellAETWCa.initialize();
+        if (options.outGlacierStorageDaily) G_daily365GlacierStorage.initialize();
+        if (options.outGlacierStorageDaily_mm) G_daily365GlacierStorage_mm.initialize();
     }
-    // endif options (initialize output daily 365 storages)
-    // daily output option 365 end
 
-    setStoragesToZero();
+    //setStoragesToZero(); // HMS old code; in principle this function is also called in setStorages.
+    //AEMS
+    //setStorages(wghmState, additionalOutIn); //HMS will be called twice otherwise
 
 }
 // end init
@@ -884,7 +760,28 @@ void routingClass::initFractionStatus() {
                         G_fGloWet[n]; // for output purposes and for specifying catchment area (for fractional routing), outflow cells are not considered anymore
         G_fswbLandAreaFrac[n] = G_fswbInit[n]; // for changing LandAreaFrac only
         G_fswbLandAreaFracNextTimestep[n] = G_fswbLandAreaFrac[n];  // initialize for first time step
+    }
+    statusStarted_updateGloResPrevYear = 0;
+}
 
+void routingClass::initFractionStatusAdditionalOI(AdditionalOutputInputFile &additionalOutIn) {
+    // this subroutine is necessary to read the fractions from additionalOI array for
+    // the initial time step. If not done this way, the year break makes trouble
+    // for the following fractions
+
+    for (int n = 0; n < ng; n++) {
+        statusStarted_landfreq_fwaterfreq_landAreaFrac[n] = 0;
+        statusStarted_landAreaFracNextTimestep[n] = 0;
+
+        // initialize G_fswb and related fractions
+
+        G_fLocLake[n] = additionalOutIn.additionalOutputInput(n, 45);
+        G_fLocWet[n] = additionalOutIn.additionalOutputInput(n, 47);
+        G_fGloLake[n] = G_glo_lake[n] / 100.; // do not adapt at all, just for output purposes
+        G_fGloWet[n] = additionalOutIn.additionalOutputInput(n, 46);
+        G_fswbInit[n] = additionalOutIn.additionalOutputInput(n, 14);
+        G_fswbLandAreaFrac[n] = G_fswbInit[n]; // for changing LandAreaFrac only
+        G_fswbLandAreaFracNextTimestep[n] = G_fswbLandAreaFrac[n];  // initialize for first time step
     }
     statusStarted_updateGloResPrevYear = 0;
 }
@@ -911,6 +808,9 @@ void routingClass::setStoragesToZero() {
             G_gloResStorage[n] = 0.; // for new reservoir algorithm
         }
 
+        if (options.glacierOpt == 1)
+            G_glacierStorage[n] = 0.;
+
         if ((options.riverveloOpt == 0) || (options.riverveloOpt == 1)) {
             G_riverStorage[n] = 0.;
         }
@@ -930,13 +830,6 @@ void routingClass::setStoragesToZero() {
         // can be satisfied from river storage in the next time step.
         // This is done independently from Option "delayedUseSatisfaction".
         G_unsatUseRiparian[n] = 0.;
-        G_remainingUse[n] = 0.;
-        G_remainingUseRes[n] = 0.;
-        G_remainingUseGloLake[n] = 0.;
-        G_remainingUseGloLakeRedistr[n] = 0.;
-        G_remainingUseResRedistr[n] = 0.;
-        G_totalDesiredUseCell[n] = 0.;
-
 
         // New approach in 2.2b for Option "use_alloc":
         // If the remainingUse cannot be satisfied in a cell, the value is added to the remainingUse of a second cell.
@@ -952,63 +845,91 @@ void routingClass::setStoragesToZero() {
 
     }
 }
-// end setStoragesToZero
 // reading dailyNUs und dailyNUg once a year in m3/month
 
-void routingClass::dailyNUInit(const char *input_dir, const short new_year) {
-    char filename[250];
+// AEMS: new subroutine to set storages according to the start values read.
+void routingClass::setStorages(WghmStateFile &wghmState, AdditionalOutputInputFile &additionalOutIn)
+{
+    //setStoragesToZero(); not needed anymore as it gets overwritten partly hereafter.
+    double cellArea = 0.;
+    for (int n = 0; n < ng; n++)
+    {
+        cellArea = geo.areaOfCellByArrayPos(n);
+        G_locLakeStorage[n] = wghmState.cell(n).locallake(0)*((cellArea * (geo.G_contfreq[n] / 100.)) / 1000000.);
+        G_locWetlStorage[n] = wghmState.cell(n).localwetland(0)*((cellArea * (geo.G_contfreq[n] / 100.)) / 1000000.);
+        G_gloLakeStorage[n] = wghmState.cell(n).globallake(0)*((cellArea * (geo.G_contfreq[n] / 100.)) / 1000000.);
+        G_gloWetlStorage[n] = wghmState.cell(n).globalwetland(0)*((cellArea * (geo.G_contfreq[n] / 100.)) / 1000000.);
+        G_riverStorage[n]   = wghmState.cell(n).river(0)*((cellArea * (geo.G_contfreq[n] / 100.)) / 1000000.);
+
+        G_groundwaterStorage[n]        = wghmState.cell(n).groundwater(0) * ((cellArea * (geo.G_contfreq[n] / 100.)) / 1000000.); // HMS todo: move to routing.cpp
+        if (options.resOpt == 1){ //KF *** for new reservoir algorithm
+            G_gloResStorage[n]  = wghmState.cell(n).reservoir(0)*((cellArea * (geo.G_contfreq[n] / 100.)) / 1000000.);
+
+        }else{
+            G_gloResStorage[n] = 0.;	// to set/reset bc. setStoragesToZero() deactivated
+        }
+
+        G_totalUnsatisfiedUse[n] = additionalOutIn.additionalOutputInput(n, 3);
+        G_UnsatisfiedUsePrevYear[n] = additionalOutIn.additionalOutputInput(n, 4);// AEMS: set G_totalUnsatisfiedUse values
+        G_reducedReturnFlow[n] = additionalOutIn.additionalOutputInput(n, 38);
+        G_reducedReturnFlowPrevYear[n] = additionalOutIn.additionalOutputInput(n, 50);
+        G_unsatisfiedNAsFromIrrig[n] = additionalOutIn.additionalOutputInput(n, 39);
+        G_unsatisfiedNAsFromIrrigPrevYear[n] =  additionalOutIn.additionalOutputInput(n, 51);
+        G_unsatisfiedNAsFromOtherSectors[n] = additionalOutIn.additionalOutputInput(n, 49); // Grid with unsatisfied NAs from other sectors than irrig associated with G_reducedReturnFlow
+        G_unsatisfiedNAsFromOtherSectorsPrevYear[n] = additionalOutIn.additionalOutputInput(n, 52);
+        //TODO: check what happens with the other arrays of the function setStoragesToZero (e.g. G_totalDesiredUseCell[n].
+    }
+}
+
+void routingClass::dailyNUInit(const std::string input_directory, const short new_year,calibParamClass &calParam)// OE: added calParam
+            {
     short month;
 
     // if this is a calibration run, allocated surface water and adapted net abstraction from groundwater should be
     // used.
     if (3 == options.subtract_use) {
-        sprintf(filename, "%s/G_ACTUAL_NAS_%d.12.UNF0", input_dir, new_year);
-        gridIO.readUnfFile(filename, ng * 12, &G_dailyNUs[0][0]);
 
-        sprintf(filename, "%s/G_ACTUAL_NAG_%d.12.UNF0", input_dir, new_year);
-        gridIO.readUnfFile(filename, ng * 12, &G_dailyNUg[0][0]);
+        G_dailyNUs.read(input_directory + "/G_ACTUAL_NAS_" + std::to_string(new_year) + ".12.UNF0");
+        G_dailyNUg.read(input_directory + "/G_ACTUAL_NAG_" + std::to_string(new_year) + ".12.UNF0");
+
     } else { // normal runs
-        sprintf(filename, "%s/G_NETUSE_SW_m3_%d.12.UNF0", input_dir, new_year);
-        gridIO.readUnfFile(filename, ng * 12, &G_dailyNUs[0][0]);
 
-        sprintf(filename, "%s/G_NETUSE_GW_m3_%d.12.UNF0", input_dir, new_year);
-        gridIO.readUnfFile(filename, ng * 12, &G_dailyNUg[0][0]);
+        G_dailyNUs.read(input_directory + "/G_NETUSE_SW_m3_" + std::to_string(new_year) + ".12.UNF0");
+        G_dailyNUg.read(input_directory + "/G_NETUSE_GW_m3_" + std::to_string(new_year) + ".12.UNF0");
+
+        if(options.calc_wtemp == 2){
+            G_yearlyWW.read(input_directory + "/G_ELEC_WW_m3_" + std::to_string(new_year) + ".UNF0");
+            G_yearlyWC.read(input_directory + "/G_ELEC_WC_m3_" + std::to_string(new_year) + ".UNF0");
+        }
     }
 
-    //cout << "read file " << input_dir << "/G_NETUSE_GW__m3_" << new_year << ".12.UNF0" << endl;
+    G_monthlyWUIrrigFromSwb.read(input_directory + "/G_IRRIG_WITHDRAWAL_USE_SW_m3_" + std::to_string(new_year) + ".12.UNF0");
 
-    sprintf(filename, "%s/G_IRRIG_WITHDRAWAL_USE_m3_%d.12.UNF0", input_dir, new_year);
-    gridIO.readUnfFile(filename, ng * 12, &G_monthlyWUIrrig[0][0]);
-
-    sprintf(filename, "%s/G_IRRIG_CONS_USE_m3_%d.12.UNF0", input_dir, new_year);
-    gridIO.readUnfFile(filename, ng * 12, &G_monthlyCUIrrig[0][0]);
+    G_monthlyCUIrrigFromSwb.read(input_directory + "/G_IRRIG_CONS_USE_SW_m3_" + std::to_string(new_year) + ".12.UNF0");
 
     // Cell-specific calibration parameters - Apply multiplier  // FP
     for (int n_local = 0; n_local < ng; n_local++) {
         for (month = 0; month < 12; month++) {
-            G_dailyNUs[n_local][month] = calibParam.getValue(M_NETABSSW, n_local) * G_dailyNUs[n_local][month];
-            G_dailyNUg[n_local][month] = calibParam.getValue(M_NETABSGW, n_local) * G_dailyNUg[n_local][month];
+            G_dailyNUs(n_local,month) = calParam.getValue(M_NETABSSW, n_local) * G_dailyNUs(n_local,month);
+            G_dailyNUg(n_local,month) = calParam.getValue(M_NETABSGW, n_local) * G_dailyNUg(n_local,month);
         }
     }
-    // end loop over grid cells
-
 
     // read file -> read GLWD units of global lakes and reservoirs (Option 28)
-    sprintf(filename, "%s/GLWDunits.UNF4", options.input_dir);
-    gridIO.readUnfFile(filename, ng, &G_glwdUnit[0]);
+    G_glwdUnit.read(std::string(options.input_dir) + "/GLWDunits.UNF4");
 
-    // CR 2015: Calculation of array G_dailyNUsAggregated[n][month] for outflow and riparian cells of global lakes/reservoirs and all other cells.
+    // CR 2015: Calculation of array G_dailyNUsAggregated(n,month) for outflow and riparian cells of global lakes/reservoirs and all other cells.
     // outflow cells: all positive values of dailyNUs are aggregated over riparian cells and are added to the value of the outflow cell
-    // negative values in riparian cells: G_dailyNUsAggregated[n][month] = dailyNUs[n][month] (initial value)
-    // positive values in riparian cells (no outflow cell): G_dailyNUsAggregated[n][month] = 0 (since value is added to outflow cell)
-    // all other cells (neither riparian nor outflow cell): G_dailyNUsAggregated[n][month] = dailyNUs[n][month] (initial value)
+    // negative values in riparian cells: G_dailyNUsAggregated(n,month) = dailyNUs(n,month) (initial value)
+    // positive values in riparian cells (no outflow cell): G_dailyNUsAggregated(n,month) = 0 (since value is added to outflow cell)
+    // all other cells (neither riparian nor outflow cell): G_dailyNUsAggregated(n,month) = dailyNUs(n,month) (initial value)
     if (1 == options.aggrNUsGloLakResOpt) {
 
         //  cout << "options.aggrNUsGloLakResOpt == 1: Aggregation of NUs over riparian cells of global lakes/reservoirs" << endl;
 
         for (int n = 0; n < ng; n++) {
             for (month = 0; month < 12; month++) {
-                G_dailyNUsAggregated[n][month] = G_dailyNUs[n][month];
+                G_dailyNUsAggregated(n,month) = G_dailyNUs(n,month);
             }
         }
 
@@ -1027,13 +948,12 @@ void routingClass::dailyNUInit(const char *input_dir, const short new_year) {
                             continue;
                         }
 
-
                         if (G_glwdUnit[n] == G_glwdUnit[i]) {
 
-                            if (G_dailyNUs[i][month] > 0.) {
+                            if (G_dailyNUs(i,month) > 0.) {
 
-                                G_dailyNUsAggregated[n][month] += G_dailyNUsAggregated[i][month];
-                                G_dailyNUsAggregated[i][month] = 0.;
+                                G_dailyNUsAggregated(n,month) += G_dailyNUsAggregated(i,month);
+                                G_dailyNUsAggregated(i,month) = 0.;
 
                             } //else (negative value): G_dailyNUsAggregated remains G_dailyNUs
                         }
@@ -1041,26 +961,24 @@ void routingClass::dailyNUInit(const char *input_dir, const short new_year) {
                 }
             }
         }
-
-    } // end if (1 == options.aggrNUsGloLakResOpt)
+    }
 
 // calculate daily values, if this is a calibration run, G_dailyNUs is also in m3
     for (month = 0; month <= 11; month++) {
         for (int n = 0; n <= ng - 1; n++) {
-            G_dailyNUs[n][month] = G_dailyNUs[n][month] / (1000000000. * (double) numberOfDaysInMonth[month]);
-            G_dailyNUg[n][month] = G_dailyNUg[n][month] / (1000000000. * (double) numberOfDaysInMonth[month]);
+            G_dailyNUs(n,month) = G_dailyNUs(n,month) / (1000000000. * (double) numberOfDaysInMonth[month]);
+            G_dailyNUg(n,month) = G_dailyNUg(n,month) / (1000000000. * (double) numberOfDaysInMonth[month]);
             if (1 == options.aggrNUsGloLakResOpt) {
-                G_dailyNUsAggregated[n][month] =
-                               G_dailyNUsAggregated[n][month] / (1000000000. * (double) numberOfDaysInMonth[month]);
+                G_dailyNUsAggregated(n,month) =
+                               G_dailyNUsAggregated(n,month) / (1000000000. * (double) numberOfDaysInMonth[month]);
             }
         }
     }
 }
-// end dailyNUInit
 
-void routingClass::annualInit(const short year) {
+void routingClass::annualInit(const short year, int start_month, AdditionalOutputInputFile &additionalOutIn) {
     // FP20161018N002: Do NOT introduce nSpecBasins as local variable nBasins, as superbasin area calculation probably wrong & obsolete
-    short m;  // index for months
+    short month;  // index for months
     int n;  // index for grid cells
     char filename[250];
 
@@ -1070,13 +988,26 @@ void routingClass::annualInit(const short year) {
         // store the values of the grid, so that we can compare
         // at the end of the year if unsatisfied use of the previous year
         // has been satisfied with water availability from the current year
-        G_UnsatisfiedUsePrevYear[n] = G_totalUnsatisfiedUse[n];
-        // G_dailyRemainingUse[n] = 0.;	// CR 2015-05-11: required for old approach for Option "use_alloc" in WG22
-        // G_satisfiedUse[n] = 0.;      // CR 2015-09: A distinction between satisfied use and actual use is not possible in 22b.
-        G_potCellRunoff[n] = 0.;        // HMS 2014-06-04 reintroduced
+        // however, this should only occur in std mode. If in AEMS mode
+        // G_UnsatisfiedUsePrevYear[n] and G_totalUnsatisfiedUse[n] are set in setStorages
+        // at beginning and only in the years after the start_year same behavior as std mode.
+        if (additionalOutIn.additionalfilestatus == 0) {
+            G_UnsatisfiedUsePrevYear[n] = G_totalUnsatisfiedUse[n];
+            G_unsatisfiedNAsFromIrrigPrevYear[n] = G_unsatisfiedNAsFromIrrig[n];
+            G_unsatisfiedNAsFromOtherSectorsPrevYear[n] = G_unsatisfiedNAsFromOtherSectors[n];
+            G_reducedReturnFlowPrevYear[n] = G_reducedReturnFlow[n];
+        }
+        else if(start_month==1||year>options.start_year){    // 1 equals Jan. here bc. configfile->startMonth btw. 1-12
+            G_UnsatisfiedUsePrevYear[n] = G_totalUnsatisfiedUse[n]; //must be done every beginning of year even with additionalOutIn.additionalfilestatus==1
+            G_unsatisfiedNAsFromIrrigPrevYear[n] = G_unsatisfiedNAsFromIrrig[n];
+            G_unsatisfiedNAsFromOtherSectorsPrevYear[n] = G_unsatisfiedNAsFromOtherSectors[n];
+            G_reducedReturnFlowPrevYear[n] = G_reducedReturnFlow[n];
+        }
 
-        //		G_AnnualCellRunoff[n] 	= 0.; // HMS 2014-06-04 commented out
-        //G_annualRiverAvail[n] = 0.;
+
+
+        G_potCellRunoff[n] = 0.;
+
         G_actualUse[n] = 0.; // used for new use_allocation (M.Hunger 2/2006)
         // FP20161018N002 Reservoir operation start years
         // Reservoir and regulated lakes area and storage capacity of current year
@@ -1084,7 +1015,6 @@ void routingClass::annualInit(const short year) {
         G_stor_cap[n] = 0.;
 
     }
-    // end loop over grid cells
 
     //
     // FP20161018N002 Reservoir operation start years
@@ -1096,7 +1026,6 @@ void routingClass::annualInit(const short year) {
     // whether naturalized runs are performed or whether reservoirs (incl. regulated lakes) are to be used
     // Here, only anthrogenic runs are of interest, as then year-specific values have to be considered
     if (options.antNatOpt == 0) { // anthropogenic runs: consider reservoirs and regulated lakes as reservoirs
-        //     cout << "routing.annualInit Part 2: if options.antNatOpt == 0, anthropogenic run: consider reservoirs and regulated lakes as reservoirs" << endl;
 
         // Anthropogenic run
         // Use reservoirs and regulated lakes
@@ -1104,25 +1033,21 @@ void routingClass::annualInit(const short year) {
 
             // Always for regulated lakes, reservoir_area and storage capacity needs to be considered
             for (n = 0; n < ng; n++) {
+
                 // 1. Do not consider another time land cover fraction of regulated lakes
                 //      because they are already in G_glo_res (that should be used in subsequent treatment, if concerned)
                 //      But as G_reservoir_area is initialized with zero every year, the transfer has to be done every year
                 //      from G_reservoir_area_full as read from the respective file (that always should contain regulated lakes, too)
                 // 2. Treat area and storage capacity
                 if (G_reg_lake_status[n] == 1) {
+
                     //reservoir area is needed anyhow from regulated lakes, otherwise they cannot be calculated
                     //in the reservoir algorithm
                     G_reservoir_area[n] = G_reservoir_area_full[n];
-                    //Previous selection, currently discarted:
-                    //but storage capacity is only needed when regulated lake gets operated
-                    //not true anymore, as we let calculate regulated lakes with stor cap also if it is not yet regulated.
-                    //if (((options.resYearOpt == 1) && (year >= G_res_start_year[n]))
-                    //        ||((options.resYearOpt == 0) && (options.resYearReference >= G_res_start_year[n])))
+
                     G_stor_cap[n] = G_stor_cap_full[n];
                 }
-                // end if G_reg_lake_status[n] == 1
             }
-            // end loop over grid cells
 
             // Define desired year of reservoir data (fraction, area, storage capacity)
             // Depending on reservoir start year option yes/no
@@ -1144,28 +1069,23 @@ void routingClass::annualInit(const short year) {
                 }
 
             }
-                // end if resYearOpt == 1
-            else if (options.resYearOpt == 0) { //resYearOpt == 0
+            else if (options.resYearOpt == 0) {
 
                 // Using reference year
                 resYearCurrentToUse = options.resYearReference;  // ISIMIP21a: G_RES_2000.UNF0
 
             }
-            // end else if resYearOpt == 0
 
             // Read desired reservoir and regulated lake fractions
             // within domain of years, e.g. current, min, max, reference year
             // ATTENTION: Fractions should be consistent to condition resYearCurrentToUse >= G_res_start_year[n]
-            sprintf(filename, "%s/G_RES/G_RES_%d.UNF0", options.input_dir, resYearCurrentToUse);
-            gridIO.readUnfFile(filename, ng, &G_glo_res[0]);
-
+            G_glo_res.read(std::string(options.input_dir) + "/G_RES/G_RES_" + std::to_string(resYearCurrentToUse) + ".UNF0");
 
             // Transfer the values at start of the first model year to array of previous
             if (0 == statusStarted_updateGloResPrevYear) {
                 routingClass::updateGloResPrevYear_pct();  // copying values of current year
                 statusStarted_updateGloResPrevYear = 1; // indicate for the next iteration that first year has been treated / model has started
             }
-            // end if
 
             // Treat area and storage capacity (outflow cells)
             for (n = 0; n < ng; n++) {
@@ -1177,8 +1097,6 @@ void routingClass::annualInit(const short year) {
                 // (1.2) Define current storage to be the maximum storage capacity of the selected year (current, max, min, reference)
                 G_actualStorageCapacity[n] = G_stor_cap[n];
             }
-            // end loop over grid cells
-
 
             // In case of erroneous attributes of a reservoir, treat it as a global lake:
             // Unknown reservoir type & negative mean outflow
@@ -1186,7 +1104,7 @@ void routingClass::annualInit(const short year) {
             for (n = 0; n < ng; n++) {
                 if ((G_reservoir_area[n] > 0.) && (resYearCurrentToUse >= G_res_start_year[n])) {
 
-                    if (G_res_type[n] == 0) {//only IF reservoir type is UNKNOWN (should not be the case anyhow)
+                    if (G_res_type[n] + 0 == 0) {//only IF reservoir type is UNKNOWN (should not be the case anyhow)
                         cerr << "ERROR: routing.annuaInit: Year " << year
                              << " - Reservoir management: G_res_type is unknown at n: " << n << endl;
                         cerr << "Reservoir will be treated as global lake!" << endl;
@@ -1197,16 +1115,23 @@ void routingClass::annualInit(const short year) {
                         G_reservoir_area_full[n] = 0.; //set full reservoir area to zero (inhibits further accounting in next year)
                         cerr << "Final global lake area " << G_lake_area[n] << endl;
                     } else if (G_mean_outflow[n] <= 0.) {
-                        cerr << "ERROR: routing.annuaInit: Year " << year
-                             << " - Reservoir management: G_mean_outflow in reservoir is " << G_mean_outflow[n]
-                             << " i.e. less than or equal to zero at n: " << n << endl;
-                        cerr << "Reservoir will be treated as global lake!" << endl;
-                        cerr << "Adding " << G_reservoir_area_full[n] << " km2 to global lake area " << G_lake_area[n]
-                             << endl;
+                        if  (!(G_LDD[n] == -1))
+                        {
+                            cerr << "ERROR: routing.annuaInit: Year " << year
+                                 << " - Reservoir management: G_mean_outflow in reservoir is " << G_mean_outflow[n]
+                                 << " i.e. less than or equal to zero at n: " << n << endl;
+                            cerr << "Reservoir will be treated as global lake!" << endl;
+                            cerr << "Adding " << G_reservoir_area_full[n] << " km2 to global lake area "
+                                 << G_lake_area[n]
+                                 << endl;
+                        }
                         G_lake_area[n] += G_reservoir_area_full[n]; //use reservoir area as lake area, or sum up reservoir and lake area
                         G_reservoir_area[n] = 0.; //set reservoir area to zero (inhibits further accounting elsewhere)
                         G_reservoir_area_full[n] = 0.; //set full reservoir area to zero (inhibits further accounting in next year)
-                        cerr << "Final global lake area " << G_lake_area[n] << endl;
+                        if (!(G_LDD[n] == -1))
+                        {
+                            cerr << "Final global lake area " << G_lake_area[n] << endl;
+                        }
 
                     }
 
@@ -1221,6 +1146,26 @@ void routingClass::annualInit(const short year) {
     }
     //end calculate only for anthropogenic runs (options.antNatOpt == 0)
 
+    // Only for runs which consider glaciers
+    if (options.glacierOpt) {
+        for (n = 0; n < ng; n++) {
+            // fill G_glacAreaFracPrevYear at the beginning of each year, before calculation of glacAreaFrac of current year
+            G_glacAreaFracPrevYear[n] = G_glacAreaFrac[n];
+            if (glacierYear.G_glacier_area[n] > 0.) { // for glacierized cells only
+                if (glacierYear.G_glacier_area[n] > (geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n]
+                - geo.G_fwaterfreq_const[n] - G_glo_wetland[n] - G_loc_wetland[n]) / 100.)) {
+                    // if input glacier area is larger than cell continental area, then set it to be equal to cell continental area
+                    G_glacAdaptedArea[n] = geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n]
+                                   - geo.G_fwaterfreq_const[n] - G_glo_wetland[n] - G_loc_wetland[n]) / 100.;
+
+                } else
+                    G_glacAdaptedArea[n] = glacierYear.G_glacier_area[n];
+                G_glacAreaFrac[n] = G_glacAdaptedArea[n] / geo.areaOfCellByArrayPos(n) * 100.; // calculate glacier area as a fraction of cell area (%)
+            } else
+                G_glacAdaptedArea[n] = 0.; // make sure that glacier area is equal to 0 in non-glacierized cells
+        }
+    } //end if glacierOpt
+
 
     // Count the number of cells with reservoir area
     short count = 0;
@@ -1233,15 +1178,13 @@ void routingClass::annualInit(const short year) {
     // FP20161018N002 Reservoir operation start years
     //
 
-
     // Part 3: Always used arrays that depend on G_glo_res (Unit: percent fraction of grid cell area)
     for (n = 0; n < ng; n++) {
         // Now, calculate land area fraction (instead of once at model initialisation at routing.init because G_glo_res can be dynamic)
 
         // (1) Land area fraction excluding lakes and reservoirs/regulated lakes (G_glo_res includes G_reg_lake)
         // fixed G_fGloLake = G_glo_lake/100 and newly read-in G_glo_res
-        G_landWaterExclGloLakAreaFrac[n] = /*(double)*/ (geo.G_contfreq[n]
-                                                         - G_glo_lake[n] - G_glo_res[n]);
+        G_landWaterExclGloLakAreaFrac[n] = (geo.G_contfreq[n] - G_glo_lake[n] - G_glo_res[n]);
         if (G_landWaterExclGloLakAreaFrac[n] < limit_errorstrange_landAreaFrac_pct) {
             cerr << "Warning: routing.annualInit: Year " << year
                  << " - Strange number for lake/wetland fraction 'G_landWaterExclGloLakAreaFrac' for cell " << n << ": "
@@ -1275,17 +1218,17 @@ void routingClass::annualInit(const short year) {
             G_landfreq_change[n] = 0.;
 
             // Initial land area fraction (in percent)
-            G_landAreaFrac[n] = /*(double)*/ (geo.G_contfreq[n]
-                                              - (G_glo_lake[n] + G_glo_wetland[n] + G_loc_lake[n] + G_loc_wetland[n] +
-                                                 G_glo_res[n]));
 
-            /*    if (n == 24026) {
-                cout << "++++ first day: G_fwaterfreq[n] " << G_fwaterfreq[n] << endl;
-                cout << "++++ first day: G_landfreq[n] " << G_landfreq[n] << endl;
-                cout << "++++ first day: geo.G_contfreq[n] " << geo.G_contfreq[n] << endl;
-                cout << "++++ first day: G_fwaterfreq[n] " << G_fwaterfreq[n] << endl;
-                cout << "++++ first day: G_landAreaFrac[n] " << G_landAreaFrac[n] << endl;
-            }*/
+            G_landAreaFrac[n] = /*(double)*/ (geo.G_contfreq[n]
+                                          - (G_glo_lake[n] + G_glo_wetland[n] + G_loc_lake[n] + G_loc_wetland[n] + G_glo_res[n]));
+
+            G_landAreaFracPrevTimestep[n] = 0.;
+
+            // Only for runs which consider glaciers
+            if (options.glacierOpt == 1) {
+                G_landAreaFrac[n] = G_landAreaFrac[n] - G_glacAreaFrac[n]; // reduce land area fraction by glacier area fraction
+            }
+
             // Treat undesired values
             if (G_landAreaFrac[n] < limit_errorstrange_landAreaFrac_pct) {
                 cerr << "Warning: routing.annualInit: Year " << year
@@ -1295,7 +1238,6 @@ void routingClass::annualInit(const short year) {
             }
             if (G_landAreaFrac[n] < 0.)
                 G_landAreaFrac[n] = 0.;
-
 
             // update indicator
             statusStarted_landfreq_fwaterfreq_landAreaFrac[n] = 1;
@@ -1317,14 +1259,37 @@ void routingClass::annualInit(const short year) {
             G_fwaterfreq_change[n] = G_fwaterfreq[n] - G_fwaterfreq_prevyear[n];
             G_landfreq_change[n] = G_landfreq[n] - G_landfreq_prevyear[n];
 
+            // Only for runs which consider glaciers
+            if (options.glacierOpt == 1) {
+                // Calculate glacier area fraction change for years after first year
+                // If there was no glacier(s) on previous year, then G_glacAreaFrac_change is equal to G_glacAreaFrac
+                G_glacAreaFrac_change[n] = G_glacAreaFrac[n] - G_glacAreaFracPrevYear[n];
+
+                if (G_glacAreaFrac_change[n] < -0.00001 || G_glacAreaFrac_change[n] > 0.00001) {
+                    // If glacier area fraction has increased or decreased with reference to the previous year,
+                    // adapt land area fraction by glacier area fraction change
+                    G_landAreaFrac[n] = G_landAreaFrac[n] - G_glacAreaFrac_change[n];
+
+                    // Treat undesired values
+                    if (G_landAreaFrac[n] < limit_errorstrange_landAreaFrac_pct) {
+                        cerr << "Warning: routing.annualInit: (options.glacierOpt == 1) & (G_glacAreaFrac_change[n] != 0.) - Strange number for land area fraction 'G_landAreaFrac' for cell "
+                        << n << ": " << G_landAreaFrac[n] << endl;
+                    }
+                    if (G_landAreaFrac[n] < 0.)
+                        G_landAreaFrac[n] = 0.;
+
+                    // Calculate land area fraction change
+                    //G_landAreaFrac_change[n] = G_landAreaFrac[n] - G_landAreaFracPrevTimestep[n];
+
+                    // Set land area fraction of next time step to adapted land area fraction
+                    G_landAreaFracNextTimestep[n] = G_landAreaFrac[n];
+
+                } // end if G_glacAreaFracChange != 0
+            } //end if glacierOpt
+
         }
-        // end else
-
-
-
     }
     // end loop over grid cells
-
 
     // Part 4: Needed only in case of anthropogenic runs using reservoirs
     if (options.antNatOpt == 0) { // anthropogenic runs: consider reservoirs and regulated lakes as reservoirs
@@ -1339,143 +1304,111 @@ void routingClass::annualInit(const short year) {
             for (n = 0; n < ng; n++) {
 
                 //check if change arrays etc. are already initialized
-                //0 == statusStarted_modelStartConditions[n] (initial condition) at routing.init, i.e. start of program execution
-                /*     if (0 == statusStarted_modelStartConditions[n]) {
-                 G_glores_prevyear[n] = G_glo_res[n]; //initialize with percent fraction of reservoirs of start or reference year
-                 // Force other changes to zero
-                 G_glores_change[n] = 0.;
-                 G_fwaterfreq_change[n] = 0.;
-                 G_landfreq_change[n] = 0.;
-                 G_landAreaFrac_change[n] = 0.;
-                 statusStarted_modelStartConditions[n] = 1; // indicate for the next iteration that first year has been treated / model has started
-              }
-              else {
-                 G_glores_change[n] = G_glo_res[n] - G_glores_prevyear[n];
-                 G_fwaterfreq_change[n] = G_fwaterfreq[n] - G_fwaterfreq_prevyear[n];
-                 G_landfreq_change[n] = G_landfreq[n] - G_landfreq_prevyear[n];
-
-              }
-        */
-
+                //in case AEMS is running over year break, routing.updateGloResPrevYear_pct() destroys potentially added reservoirs
+                if (additionalOutIn.additionalfilestatus == 1) {
+                    G_glores_prevyear[n] = additionalOutIn.additionalOutputInput(n, 44);
+                }
                 // Calculate (possible) increase in reservoir area at start of the year
                 // indicating operation start of a new reservoir
-                G_glores_change[n] = G_glo_res[n] - G_glores_prevyear[n];
+                if (start_month == 1 || year > options.start_year){
 
+                    G_glores_change[n] = G_glo_res[n] - G_glores_prevyear[n];
+                    // Perform changes in water storages only if a new reservoir started operation
+                    if (G_glores_change[n] > 0.) {
 
-                // Perform changes in water storages only if a new reservoir started operation
-                if (G_glores_change[n] > 0.) {
+                        // Subtract additional reservoir fraction from land area fraction
+                        // (1) Land area fraction including wetlands, local lakes, rivers
+                        // day 0 (current day, in current year: year / Jan / 01): G_glo_res[n]
+                        // From routing.updateLandAreaFrac:
+                        // day-1 (previous day, in previous year: year-1 / Dec / 31): G_landAreaFrac[n]
+                        // day-2 (day before previous day, in previous year: year-1 / Dec / 30): G_landAreaFracPrevTimestep[n]
 
-                    // Subtract additional reservoir fraction from land area fraction
-                    // (1) Land area fraction including wetlands, local lakes, rivers
-                    // day 0 (current day, in current year: year / Jan / 01): G_glo_res[n]
-                    // From routing.updateLandAreaFrac:
-                    // day-1 (previous day, in previous year: year-1 / Dec / 31): G_landAreaFrac[n]
-                    // day-2 (day before previous day, in previous year: year-1 / Dec / 30): G_landAreaFracPrevTimestep[n]
-                //    if (n == 22473) {
-                //        cout << "YEAR " << year << endl;
-                //        cout << "G_landAreaFrac before adapt " << G_landAreaFrac[n] << endl;
-                //        cout << "G_glo_res[n] before adapt " << G_glo_res[n] << endl;
-                //    }
-                    if (G_glores_prevyear[n] > 0.) { // in case there was already a reservoir fraction, adapt only the changes.
-                        G_landAreaFrac[n] = G_landAreaFrac[n] - G_glores_change[n];
-                    }
-                    else { //reservoir fraction increased from 0.
-                        G_landAreaFrac[n] = G_landAreaFrac[n] - G_glo_res[n];
-                    }
-                //    if (n == 22473) {
-                //        cout << "G_landAreaFrac after adapt " << G_landAreaFrac[n] << endl;
-                //    }
-                    // Treat undesired values
-                    if (G_landAreaFrac[n] < limit_errorstrange_landAreaFrac_pct) {
-                        cerr
-                                       << "Warning: routing.annualInit: (options.antNatOpt == 0) & (options.resOpt == 1) & (G_glores_change[n] > 0.) - Strange number for land area fraction 'G_landAreaFrac' for cell "
-                                       << n << ": " << G_landAreaFrac[n] << endl;
-                    }
-                    if (G_landAreaFrac[n] < 0.)
-                        G_landAreaFrac[n] = 0.;
-
-
-                    // START ISIMIP2b POSSIBLE uncomment 2016.
-                    // ATTENTION: POSSIBLY For ISIMIP2B, GLWD units consistent to outflow cells are missing.
-                    // Therefore, the calculation of net change and subsequent transfer of storage to reservoir storage is commented out
-                    // Scaling of storage as usual in daily.calcNewDay
-                    //
-
-                    // Calculate net change
-                    // Changes of day 0 from wetland / loc.lakes/rivers (fractional routing) + new reservoir
-                    // with respect to day-1
-                    G_landAreaFrac_change[n] = G_landAreaFrac[n] - G_landAreaFracPrevTimestep[n];
-                    /*  if (n == 40812) {
-                        cout << "G_landAreaFrac_change[n] " << G_landAreaFrac_change[n] << endl;
-                        cout << "G_landAreaFrac[n] " << G_landAreaFrac[n] << endl;
-                        cout << "G_landAreaFracPrevTimestep[n] " << G_landAreaFracPrevTimestep[n] << endl;
-                    }*/
-                    // In case that net change is not negative,
-                    // assume that it is a result of fractional routing only, reset G_landAreaFrac to value of day-2
-                    // and let daily.calcNewDay execute as usual, implicitly applying no changes (from fractional routing
-                    if (G_landAreaFrac_change[n] >= 0.) {
-                        G_landAreaFrac[n] = G_landAreaFracPrevTimestep[n];
-                        G_landAreaFrac_change[n] = 0.;
-                    }
-                        // Net change is negative (reservoir and/or added: Adapt storage
-                    else {
-
-                        // Calculate absolute storage volume in km3 from reduced ("lost") land surface fraction
-                        canopyWaterContent_change_km3 =
-                                       dailyWaterBalance.G_canopyWaterContent[n] * geo.areaOfCellByArrayPos(n) /
-                                       1000000.0 * ((-G_landAreaFrac_change[n]) / 100.0);
-                        soilWaterContent_change_km3 =
-                                       dailyWaterBalance.G_soilWaterContent[n] * geo.areaOfCellByArrayPos(n) /
-                                       1000000.0 * ((-G_landAreaFrac_change[n]) / 100.0);
-                        snowWaterContent_change_km3 =
-                                       dailyWaterBalance.G_snow[n] * geo.areaOfCellByArrayPos(n) / 1000000.0 *
-                                       ((-G_landAreaFrac_change[n]) / 100.0);
-                        SnowInElevation_n_change_km3 = 0.;
-                        for (short elev = 0; elev < 101; elev++) {
-                            SnowInElevation_elev_change_km3 = dailyWaterBalance.G_SnowInElevation[n][elev] / 100.0 *
-                                                              geo.areaOfCellByArrayPos(n) / 1000000.0 *
-                                                              ((-G_landAreaFrac_change[n]) / 100.0);
-                            SnowInElevation_n_change_km3 += SnowInElevation_elev_change_km3;
+                        // 1 equals Jan. here bc. configfile->startMonth btw. 1-12
+                        if (G_glores_prevyear[n] > 0.) { // in case there was already a reservoir fraction, adapt only the changes.
+                            G_landAreaFrac[n] = G_landAreaFrac[n] - G_glores_change[n];
                         }
-                        if (((SnowInElevation_n_change_km3 - snowWaterContent_change_km3) >
-                             limit_errorstrange_snowWaterContent_change_km3)
-                            || ((snowWaterContent_change_km3 - SnowInElevation_n_change_km3) >
-                                limit_errorstrange_snowWaterContent_change_km3)) {
+                        else { //reservoir fraction increased from 0.
+                            G_landAreaFrac[n] = G_landAreaFrac[n] - G_glo_res[n];
+                        }
+
+                        G_glores_change[n]=0.;
+                        // Treat undesired values
+                        if (G_landAreaFrac[n] < limit_errorstrange_landAreaFrac_pct) {
                             cerr
-                                           << "Warning: routing.annualInit: (options.antNatOpt == 0) & (options.resOpt == 1) & (G_glores_change[n] > 0.) - Exceeded limit of difference between 'SnowInElevation_n_change_km3' and 'snowWaterContent_change_km3' for cell "
-                                           << n << ": " << SnowInElevation_n_change_km3 << ", "
-                                           << snowWaterContent_change_km3 << ", limit: "
-                                           << limit_errorstrange_snowWaterContent_change_km3 << endl;
+                                           << "Warning: routing.annualInit: (options.antNatOpt == 0) & (options.resOpt == 1) & (G_glores_change[n] > 0.) - Strange number for land area fraction 'G_landAreaFrac' for cell "
+                                           << n << ": " << G_landAreaFrac[n] << endl;
                         }
-                        //dailyWaterBalance.G_dailyStorageTransfer[n] = 0.;
+                        if (G_landAreaFrac[n] < 0.)
+                            G_landAreaFrac[n] = 0.;
 
-                        // Add storage to reservoir storage volume located in outflow cell, as identified via GLWDunit grid
+                        // START ISIMIP2b POSSIBLE uncomment 2016.
+                        // ATTENTION: POSSIBLY For ISIMIP2B, GLWD units consistent to outflow cells are missing.
+                        // Therefore, the calculation of net change and subsequent transfer of storage to reservoir storage is commented out
+                        // Scaling of storage as usual in daily.calcNewDay
+                        //
 
-                        G_gloResStorage[G_outflow_cell_assignment[n] - 1] +=
-                                       canopyWaterContent_change_km3 + soilWaterContent_change_km3 +
-                                       snowWaterContent_change_km3; //
+                        // Calculate net change
+                        // Changes of day 0 from wetland / loc.lakes/rivers (fractional routing) + new reservoir
+                        // with respect to day-1
+                        G_landAreaFrac_change[n] = G_landAreaFrac[n] - G_landAreaFracPrevTimestep[n];
 
-                        // ATTENTION: dailyWaterBalance.G_canopyWaterContent etc. are in units of Millimeter (mm)
-                        // Through the reduction of land surface fraction, water storage is implicitly reduced
-                        // To ensure that no further scaling is done within daily.calcNewDay, set equal previous value (day-1) to current newly determined uvalue (day 0)
-                        /*  if (n == 40812) {
-                            cout << "G_landAreaFracPrevTimestep[n] " << G_landAreaFracPrevTimestep[n] << endl;
-                            cout << "G_landAreaFrac[n] " << G_landAreaFrac[n] << endl;
-                        }*/
-                        G_landAreaFracPrevTimestep[n] = G_landAreaFrac[n];
-                        /*   if (n == 40812) {
-                            cout << "G_landAreaFracPrevTimestep[n] " << G_landAreaFracPrevTimestep[n] << endl;
-                            cout << "G_landAreaFrac[n] " << G_landAreaFrac[n] << endl;
-                        }*/
+                        // In case that net change is not negative,
+                        // assume that it is a result of fractional routing only, reset G_landAreaFrac to value of day-2
+                        // and let daily.calcNewDay execute as usual, implicitly applying no changes (from fractional routing
+                        if (G_landAreaFrac_change[n] >= 0.) {
+                            G_landAreaFrac[n] = G_landAreaFracPrevTimestep[n];
+                            G_landAreaFrac_change[n] = 0.;
+                        }
+                            // Net change is negative (reservoir and/or added: Adapt storage
+                        else {
+
+                            // Calculate absolute storage volume in km3 from reduced ("lost") land surface fraction
+                            canopyWaterContent_change_km3 =
+                                           dailyWaterBalance.G_canopyWaterContent[n] * geo.areaOfCellByArrayPos(n) /
+                                           1000000.0 * ((-G_landAreaFrac_change[n]) / 100.0);
+                            soilWaterContent_change_km3 =
+                                           dailyWaterBalance.G_soilWaterContent[n] * geo.areaOfCellByArrayPos(n) /
+                                           1000000.0 * ((-G_landAreaFrac_change[n]) / 100.0);
+                            snowWaterContent_change_km3 =
+                                           dailyWaterBalance.G_snow[n] * geo.areaOfCellByArrayPos(n) / 1000000.0 *
+                                           ((-G_landAreaFrac_change[n]) / 100.0);
+                            SnowInElevation_n_change_km3 = 0.;
+                            for (short elev = 0; elev < 101; elev++) {
+                                SnowInElevation_elev_change_km3 = dailyWaterBalance.G_SnowInElevation(n,elev) / 100.0 *
+                                                                  geo.areaOfCellByArrayPos(n) / 1000000.0 *
+                                                                  ((-G_landAreaFrac_change[n]) / 100.0);
+                                SnowInElevation_n_change_km3 += SnowInElevation_elev_change_km3;
+                            }
+
+                            if (((SnowInElevation_n_change_km3 - snowWaterContent_change_km3) >
+                                 limit_errorstrange_snowWaterContent_change_km3)
+                                || ((snowWaterContent_change_km3 - SnowInElevation_n_change_km3) >
+                                    limit_errorstrange_snowWaterContent_change_km3)) {
+                                cerr
+                                               << "Warning: routing.annualInit: (options.antNatOpt == 0) & (options.resOpt == 1) & (G_glores_change[n] > 0.) - Exceeded limit of difference between 'SnowInElevation_n_change_km3' and 'snowWaterContent_change_km3' for cell "
+                                               << n << ": " << SnowInElevation_n_change_km3 << ", "
+                                               << snowWaterContent_change_km3 << ", limit: "
+                                               << limit_errorstrange_snowWaterContent_change_km3 << endl;
+                            }
+
+                            // Add storage to reservoir storage volume located in outflow cell, as identified via GLWDunit grid
+
+                            G_gloResStorage[G_outflow_cell_assignment[n] - 1] +=
+                                           canopyWaterContent_change_km3 + soilWaterContent_change_km3 +
+                                           snowWaterContent_change_km3; //
+
+                            // ATTENTION: dailyWaterBalance.G_canopyWaterContent etc. are in units of Millimeter (mm)
+                            // Through the reduction of land surface fraction, water storage is implicitly reduced
+                            // To ensure that no further scaling is done within daily.calcNewDay, set equal previous value (day-1) to current newly determined uvalue (day 0)
+
+                            G_landAreaFracNextTimestep[n] = G_landAreaFrac[n];
+
+                        }
+                        // end else
                     }
-                    // end else
-
-                    //
-                    // END ISIMIP2b uncomment
-
-
+                    // end if (G_glores_change[n] > 0.)
                 }
-                // end if (G_glores_change[n] > 0.)
+                // end if (start_month == 1 || year > options.start_year)
             }
             // end loop over grid cells
 
@@ -1484,83 +1417,82 @@ void routingClass::annualInit(const short year) {
 
     }
     //end calculate only for anthropogenic runs (options.antNatOpt == 0)
-// FP20161018N002: Do NOT introduce nSpecBasins as local variable nBasins, as superbasin area calculation probably wrong & obsolete
-//    // Superbasin calculation currently obsolete, probably not working correctly in WaterGAP2.2b, do in postprocessing
-//    // calculate land area of basins
-//    extern signed short G_sbasin[ng];
-//    basinLandArea = new double[nBasins];
-//
-//    for (int n = 0; n < nBasins; ++n)
-//        basinLandArea[n] = 0.;
-//    for (int n = 0; n < ng; ++n) {
-//        if (G_sbasin[n] > 0) {
-//            basinLandArea[G_sbasin[n] - 1] += G_landAreaFrac[n] * geo.areaOfCellByArrayPos(n) / 100.0;
-//        }
-//    }
-//    // end loop over grid cells
 
     // END ISIMIP21a insert ersion
-
 
     // Initialize arrays for writing output
     if ((2 == options.grid_store) || (4 == options.grid_store) || (6 == options.grid_store)) {
         for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++) {
-                G_monthlyConsistentPrecip[n][m] = 0.;
+            for (int month = 0; month < 12; month++) {
+                G_monthlyConsistentPrecip(n,month) = 0.;
 
-                G_monthlyRiverAvail[n][m] = 0.;
-                G_monthlyPotCellRunoff[n][m] = 0.;
-                G_monthlyPotCellRunoffDeficit[n][m] = 0.;
-                G_monthlyCellRunoff[n][m] = 0.;
-                G_monthlyCellSurfaceRunoff[n][m] = 0.;
-                // added for cell AET calculation (2.1f)
-                G_monthlyCellAET[n][m] = 0.;
-                G_monthlyCellAETWCa[n][m] = 0.;
-                G_monthlyOpenWaterEvap[n][m] = 0.;
-                G_monthlyVelocity[n][m] = 0.;
-                G_monthlySurfStor[n][m] = 0.;
-                G_monthlySurfStor_mm[n][m] = 0.;
-                G_monthlyMinRiverAvail[n][m] = 0.;
-                G_monthlyMaxRiverAvail[n][m] = 0.;
-                G_monthlyGwrSwb[n][m] = 0.;
-                G_monthlyLandAreaFrac[n][m] = 0.;
-                G_monthlyFswb[n][m] = 0.;
-                G_monthlyGwRunoff[n][m] = 0.;
-                G_monthlyLocWetlExtent[n][m] = 0.;
-                G_monthlyGloWetlExtent[n][m] = 0.;
-                if (options.outRiverPET == 1) G_monthlyRiverAreaFrac[n][m] = 0.;
-                if (options.outRiverPET == 1) G_monthlyRiverPET[n][m] = 0.;
+                G_monthlyRiverAvail(n,month) = 0.;
+                G_monthlyPotCellRunoff(n,month) = 0.;
+                G_monthlyPotCellRunoffDeficit(n,month) = 0.;
+                G_monthlyCellRunoff(n,month) = 0.;
+                G_monthlyCellSurfaceRunoff(n,month) = 0.;
+                G_monthlyGwrunSurfrun(n,month) = 0.;
+
+                G_monthlyCellAET(n,month) = 0.;
+                G_monthlyCellAETWCa(n,month) = 0.;
+                G_monthlyOpenWaterEvap(n,month) = 0.;
+                G_monthlyVelocity(n,month) = 0.;
+                G_monthlySurfStor(n,month) = 0.;
+                G_monthlySurfStor_mm(n,month) = 0.;
+                G_monthlyMinRiverAvail(n,month) = 0.;
+                G_monthlyMaxRiverAvail(n,month) = 0.;
+                if (options.outWaterTempMonthly) G_monthlyMeanWaterTempRiver(n,month) = 0.;
+                if (options.outWaterTempMonthlyAllSWB) {
+                    G_monthlyMeanWaterTempLocLake(n, month) = 0.;
+                    G_monthlyMeanWaterTempLocWetl(n, month) = 0.;
+                    G_monthlyMeanWaterTempGloLake(n, month) = 0.;
+                    G_monthlyMeanWaterTempReservoir(n, month) = 0.;
+                    G_monthlyMeanWaterTempGloWetl(n, month) = 0.;
+                }
+                G_monthlyGwrSwb(n,month) = 0.;
+                G_monthlyLandAreaFrac(n,month) = 0.;
+                G_monthlyFswb(n,month) = 0.;
+                G_monthlyGwRunoff(n,month) = 0.;
+                G_monthlyLocWetlExtent(n,month) = 0.;
+                G_monthlyGloWetlExtent(n,month) = 0.;
+                if (options.outRiverPET == 1) G_monthlyRiverAreaFrac(n,month) = 0.;
+                if (options.outRiverPET == 1) G_monthlyRiverPET(n,month) = 0.;
 
                 if (options.resOpt == 1) {
-                    G_monthlyResStorage[n][m] = 0.;
-                    G_monthlyResStorageRatio[n][m] = 0.;
-                    G_monthlyResInflow[n][m] = 0.;
-                    G_monthlyResOutflow[n][m] = 0.;
+                    G_monthlyResStorage(n,month) = 0.;
+                    G_monthlyResStorageRatio(n,month) = 0.;
+                    G_monthlyResInflow(n,month) = 0.;
+                    G_monthlyResOutflow(n,month) = 0.;
+                }
+
+                if (options.glacierOpt == 1) {
+                    G_monthlyGlacierArea(n,month) = 0.;
+                    G_monthlyGlacierAreaFrac(n,month) = 0.;
+                    G_monthlyGlacierRunoff(n,month) = 0.;
+                    G_monthlyGlacierPrecip(n,month) = 0.;
+                    G_monthlyGlacierStorage(n,month) = 0.;
                 }
 
                 if (options.outRiverInUpstream)
-                    G_monthlyRiverInUpstream[n][m] = 0.;
-                G_monthlyRiverStorage[n][m] = 0.;
-                G_monthlyGwStorage[n][m] = 0.; // moved from daily.cpp
-                G_monthlyLocLakeStorage[n][m] = 0.;
-                G_monthlyLocWetlStorage[n][m] = 0.;
-                G_monthlyGloLakeStorage[n][m] = 0.;
-                G_monthlyGloWetlStorage[n][m] = 0.;
-                G_monthlySatisfiedUse[n][m] = 0.;
-                G_monthlyActualUse[n][m] = 0.;
-                G_monthlyNUg[n][m] = 0.;
-                // CR 150819 test output
-                G_monthlyAllocatedUse[n][m] = 0.; // FP 2015, not used anymore, at the moment, implement if needed again
-                G_monthlySatisAllocatedUseinSecondCell[n][m] = 0.;
+                    G_monthlyRiverInUpstream(n,month) = 0.;
+                G_monthlyRiverStorage(n,month) = 0.;
+                G_monthlyGwStorage(n,month) = 0.;
+                G_monthlyLocLakeStorage(n,month) = 0.;
+                G_monthlyLocWetlStorage(n,month) = 0.;
+                G_monthlyGloLakeStorage(n,month) = 0.;
+                G_monthlyGloWetlStorage(n,month) = 0.;
+                G_monthlySatisfiedUse(n,month) = 0.;
+                G_monthlyActualUse(n,month) = 0.;
+                G_monthlyNUg(n,month) = 0.;
+                G_monthlyAllocatedUse(n,month) = 0.;
+                G_monthlySatisAllocatedUseinSecondCell(n,month) = 0.;
+                G_monthlyRedistributeAllocUse(n, month) = 0.;
+                G_monthlyRedistributeGLWDUse(n, month) = 0.;
             }
-        // end loop over months
-
 
     }
-    // end if options (for writing grid output)
 
 }
-// end annualInit
 
 // HMS 2015-03-02 I do not understand why this is called monthlyInit - should it be named better daily31outInit? (same in daily.cpp)
 // (FP 2015: perhaps naming is because the data arrays contain data from one month)
@@ -1568,50 +1500,52 @@ void routingClass::annualInit(const short year) {
 void routingClass::daily31outInit() {
     short d;
     int n;
-
-    //if ((3 == options.grid_store) || (4 == options.grid_store)) {
     for (n = 0; n < ng; n++)
         for (d = 0; d < 31; d++) {
-            if (options.outPrecDaily) G_daily31ConsistentPrecip[n][d] = 0.;
+            if (options.outPrecDaily) G_daily31ConsistentPrecip(n,d) = 0.;
 
-            if (options.outCellRunoffDaily) G_daily31CellRunoff[n][d] = 0.;
-            if (options.outCellSurfaceDaily) G_daily31CellSurfaceRunoff[n][d] = 0.;
-            if (options.outGWRunoffDaily) G_daily31GwRunoff[n][d] = 0.;
-            if (options.outRiverAvailDaily) G_daily31RiverAvail[n][d] = 0.;
-            if (options.outRiverVeloDaily) G_daily31Velocity[n][d] = 0.;
-            if (options.outCellAETDaily) G_daily31CellAET[n][d] = 0.;
-            if (options.outSurfStorDaily) G_daily31SurfStor[n][d] = 0.;
-            if (options.outSingleStoragesDaily) G_daily31LocLakeStor[n][d] = 0.;
-            if (options.outSingleStoragesDaily) G_daily31LocWetlStor[n][d] = 0.;
-            if (options.outSingleStoragesDaily) G_daily31GloLakeStor[n][d] = 0.;
-            if (options.outSingleStoragesDaily) G_daily31GloWetlStor[n][d] = 0.;
-            if (options.outSingleStoragesDaily) G_daily31RiverStor[n][d] = 0.;
-            if (options.outSingleStoragesDaily) G_daily31ResStor[n][d] = 0.;
-            if (options.outSingleStoragesDaily || options.outGWStorageDaily) G_daily31GwStor[n][d] = 0.;
+            if (options.outCellRunoffDaily) G_daily31CellRunoff(n,d) = 0.;
+            if (options.outCellSurfaceDaily) G_daily31CellSurfaceRunoff(n,d) = 0.;
+            if (options.outGWRunoffDaily) G_daily31GwRunoff(n,d) = 0.;
+            if (options.outRiverAvailDaily) G_daily31RiverAvail(n,d) = 0.;
+            if (options.outRiverVeloDaily) G_daily31Velocity(n,d) = 0.;
+            if (options.outWaterTempDaily) G_daily31WaterTemp(n,d) = -9999.;
+            if (options.outWaterTempDailyAllSWB){
+                G_daily31locLakeTemp(n,d) = -9999.;
+                G_daily31locWetlTemp(n,d) = -9999.;
+                G_daily31gloLakeTemp(n,d) = -9999.;
+                G_daily31reservoirTemp(n,d) = -9999.;
+                G_daily31gloWetlandTemp(n,d) = -9999.;
+            }
+            if (options.outCellAETDaily) G_daily31CellAET(n,d) = 0.;
+            if (options.outSurfStorDaily) G_daily31SurfStor(n,d) = 0.;
+            if (options.outSingleStoragesDaily) G_daily31LocLakeStor(n,d) = 0.;
+            if (options.outSingleStoragesDaily) G_daily31LocWetlStor(n,d) = 0.;
+            if (options.outSingleStoragesDaily) G_daily31GloLakeStor(n,d) = 0.;
+            if (options.outSingleStoragesDaily) G_daily31GloWetlStor(n,d) = 0.;
+            if (options.outSingleStoragesDaily) G_daily31RiverStor(n,d) = 0.;
+            if (options.outSingleStoragesDaily) G_daily31ResStor(n,d) = 0.;
+            if (options.outSingleStoragesDaily || options.outGWStorageDaily) G_daily31GwStor(n,d) = 0.;
             if (options.outTotalWaterInStoragesDaily_km3 ||
                 options.outTotalWaterInStoragesDaily_mm)
-                G_daily31TotalWaterInStorages_km3[n][d] = 0.;
-            if (options.outTotalWaterInStoragesDaily_mm) G_daily31TotalWaterInStorages_mm[n][d] = 0.;
-            if (options.outGwrSwbDaily) G_daily31GwrSwb[n][d] = 0.;
-            if (options.outFswbDaily) G_daily31Fswb[n][d] = 0.;
-            if (options.outLandAreaFracDaily) G_daily31LandAreaFrac[n][d] = 0.;
-            if (options.outGwrunSurfrunDaily) G_daily31GwrunSurfrun[n][d] = 0.;
-            if (options.outCellAETWCaDaily) G_daily31CellAETWCa[n][d] = 0.;
+                G_daily31TotalWaterInStorages_km3(n,d) = 0.;
+            if (options.outTotalWaterInStoragesDaily_mm) G_daily31TotalWaterInStorages_mm(n,d) = 0.;
+            if (options.outGwrSwbDaily) G_daily31GwrSwb(n,d) = 0.;
+            if (options.outFswbDaily) G_daily31Fswb(n,d) = 0.;
+            if (options.outLandAreaFracDaily) G_daily31LandAreaFrac(n,d) = 0.;
+            if (options.outGwrunSurfrunDaily) G_daily31GwrunSurfrun(n,d) = 0.;
+            if (options.outCellAETWCaDaily) G_daily31CellAETWCa(n,d) = 0.;
         }
-    // endfor loop over 31 days
 }
-//}
-// end daily31outInit
-// daily output option 31 end
 
-// HMS 2017_02_21 to store daily TWS value for first and last day in year.
+// to store daily TWS value for first and last day in year.
 void routingClass::startendOutInit() {
     short d;
     int n;
 
     for (n = 0; n < ng; n++)
         for (d = 0; d < 1; d++) {
-            G_startendTotalWaterInStorages_km3[n][d] = 0.;
+            G_startendTotalWaterInStorages_km3(n,d) = 0.;
         }
 }
 
@@ -1620,76 +1554,69 @@ void routingClass::daily365outInit() {  // HMS 2015-03-02 where is this class ca
     short d;
     int n;
 
-    //if ((5 == options.grid_store) || (6 == options.grid_store)) {
     for (n = 0; n < ng; n++)
         for (d = 0; d < 365; d++) {
 
-//CR #############################################################################################
-//	G_daily365ActualUse[n][d]				= 0.;
-//	G_daily365AllocUse[n][d]				= 0.;
-//	G_daily365AllocUseNextDay[n][d]			= 0.;
-//	G_daily365TotalUnsatUse[n][d]			= 0.;
-//	G_daily365UnsatAllocUseNextDay[n][d]	= 0.;
-//CR #############################################################################################
-
             if ((options.outPrecDaily) ||
                 ((options.scoutcPrecip) && (2 == options.day_store)))
-                G_daily365ConsistentPrecip[n][d] = 0.;
+                G_daily365ConsistentPrecip(n,d) = 0.;
             if ((options.outCellRunoffDaily) ||
                 (((options.scoutCellRunoffkm3) || (options.scoutCellRunoffmm)) && (2 == options.day_store)))
-                G_daily365CellRunoff[n][d] = 0.;
+                G_daily365CellRunoff(n,d) = 0.;
             if ((options.outCellRunoffDaily) ||
                 ((options.scoutCellRunoffmm) && (2 == options.day_store)))
-                G_daily365CellRunoff_mm[n][d] = 0.;
+                G_daily365CellRunoff_mm(n,d) = 0.;
             if ((options.outCellSurfaceDaily) ||
                 ((options.scoutCellSRunoff) && (2 == options.day_store)))
-                G_daily365CellSurfaceRunoff[n][d] = 0.; // FP20160915N002
+                G_daily365CellSurfaceRunoff(n,d) = 0.;
             if ((options.outLandAreaFracDaily) ||
                 ((options.scoutLandAreaFrac) && (2 == options.day_store)))
-                G_daily365LandAreaFrac[n][d] = 0.;
+                G_daily365LandAreaFrac(n,d) = 0.;
             if ((options.outGWRunoffDaily) || ((options.scoutGwRunoff) && (2 == options.day_store)))
-                G_daily365GwRunoff[n][d] = 0.;
+                G_daily365GwRunoff(n,d) = 0.;
             if ((options.outRiverAvailDaily) || ((options.scoutQ) && (2 == options.day_store)))
-                G_daily365RiverAvail[n][d] = 0.;
+                G_daily365RiverAvail(n,d) = 0.;
             if ((options.outRiverVeloDaily) || ((options.scoutFlowVelo) && (2 == options.day_store)))
-                G_daily365Velocity[n][d] = 0.;
+                G_daily365Velocity(n,d) = 0.;
             if ((options.outCellAETDaily) || ((options.scoutCellAET) && (2 == options.day_store)))
-                G_daily365CellAET[n][d] = 0.;
+                G_daily365CellAET(n,d) = 0.;
             if ((options.outSurfStorDaily) ||
                 ((options.scoutSurfaceStor) && (2 == options.day_store)))
-                G_daily365SurfStor[n][d] = 0.;
+                G_daily365SurfStor(n,d) = 0.;
             if ((options.outSingleStoragesDaily) ||
                 ((options.scoutLocLake) && (2 == options.day_store)))
-                G_daily365LocLakeStor[n][d] = 0.;
+                G_daily365LocLakeStor(n,d) = 0.;
             if ((options.outSingleStoragesDaily) ||
                 ((options.scoutLocWet) && (2 == options.day_store)))
-                G_daily365LocWetlStor[n][d] = 0.;
+                G_daily365LocWetlStor(n,d) = 0.;
             if ((options.outSingleStoragesDaily) ||
                 ((options.scoutGloLake) && (2 == options.day_store)))
-                G_daily365GloLakeStor[n][d] = 0.;
+                G_daily365GloLakeStor(n,d) = 0.;
             if ((options.outSingleStoragesDaily) ||
                 ((options.scoutGloWet) && (2 == options.day_store)))
-                G_daily365GloWetlStor[n][d] = 0.;
+                G_daily365GloWetlStor(n,d) = 0.;
             if ((options.outSingleStoragesDaily) ||
                 ((options.scoutRiver) && (2 == options.day_store)))
-                G_daily365RiverStor[n][d] = 0.;
+                G_daily365RiverStor(n,d) = 0.;
             if ((options.outSingleStoragesDaily) ||
                 ((options.scoutReservoir) && (2 == options.day_store)))
-                G_daily365ResStor[n][d] = 0.;
+                G_daily365ResStor(n,d) = 0.;
             if ((options.outSingleStoragesDaily || options.outGWStorageDaily) ||
                 ((options.scoutGwStor) && (2 == options.day_store)))
-                G_daily365GwStor[n][d] = 0.;
+                G_daily365GwStor(n,d) = 0.;
             if ((options.outTotalWaterInStoragesDaily_km3 || options.outTotalWaterInStoragesDaily_mm) ||
                 (((options.scoutTWSkm3) || (options.scoutTWSmm)) && (2 == options.day_store)))
-                G_daily365TotalWaterInStorages_km3[n][d] = 0.;
+                G_daily365TotalWaterInStorages_km3(n,d) = 0.;
             if ((options.outTotalWaterInStoragesDaily_mm) ||
                 ((options.scoutTWSmm) && (2 == options.day_store)))
-                G_daily365TotalWaterInStorages_mm[n][d] = 0.;
+                G_daily365TotalWaterInStorages_mm(n,d) = 0.;
             if ((options.outGwrSwbDaily) || ((options.scoutGwrSwb) && (2 == options.day_store)))
-                G_daily365GwrSwb[n][d] = 0.;
-            if ((options.outFswbDaily) || ((options.scoutFswb) && (2 == options.day_store))) G_daily365Fswb[n][d] = 0.;
-            if (options.outGwrunSurfrunDaily) G_daily365GwrunSurfrun[n][d] = 0.;
-            if (options.outCellAETWCaDaily) G_daily365CellAETWCa[n][d] = 0.;
+                G_daily365GwrSwb(n,d) = 0.;
+            if ((options.outFswbDaily) || ((options.scoutFswb) && (2 == options.day_store))) G_daily365Fswb(n,d) = 0.;
+            if (options.outGwrunSurfrunDaily) G_daily365GwrunSurfrun(n,d) = 0.;
+            if (options.outCellAETWCaDaily) G_daily365CellAETWCa(n,d) = 0.;
+            if (options.outGlacierStorageDaily) G_daily365GlacierStorage(n,d) = 0.;
+            if (options.outGlacierStorageDaily_mm) G_daily365GlacierStorage_mm(n,d) = 0.;
         }
     // endfor loop over 365 days
 
@@ -1699,25 +1626,28 @@ void routingClass::daily365outInit() {  // HMS 2015-03-02 where is this class ca
 // end daily365outInit
 // daily output option 365 end
 
-void routingClass::routing(const short year, short day, short month, const short day_in_month) {
+void routingClass::routing(const short year, short day, short month, const short day_in_month,
+                           const short last_day_in_month, WghmStateFile &wghmState,
+                           AdditionalOutputInputFile &additionalOutIn, const short readinstatus,calibParamClass &calParam)// OE: added calParam
+            {
     // routing through river network
-    extern dailyWaterBalanceClass dailyWaterBalance;
 
-    extern short G_toBeCalculated[ng];
 
     const short int first_day_in_month[12] = {1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335};
 
-    double G_localRunoff[ng];
-    double G_localRunoffIntoRiver[ng]; // for options.fractionalRouting
-    double G_localGWRunoff[ng]; // needed for different values for sub-/surface runoff
-    double G_localGWRunoffIntoRiver[ng]; // for options.fractionalRouting
+    Grid<double> G_localRunoff;
+    Grid<double> G_localRunoffIntoRiver; // for options.fractionalRouting
+    Grid<double> G_localGWRunoff; // needed for different values for sub-/surface runoff
+    Grid<double> G_localGWRunoffIntoRiver; // for options.fractionalRouting
+    Grid<double> G_glacRunoff; // for options.glacierOpt
+
     // initialize
-    for (int n = 0; n < ng; n++) {
-        G_localRunoff[n] = 0.;
-        G_localRunoffIntoRiver[n] = 0.;
-        G_localGWRunoff[n] = 0.;
-        G_localGWRunoffIntoRiver[n] = 0.;
-    }
+    G_localRunoff.fill(0.0);
+    G_localRunoffIntoRiver.fill(0.0);
+    G_localGWRunoff.fill(0.0);
+    G_localGWRunoffIntoRiver.fill(0.0);
+    G_glacRunoff.fill(0.0);
+
     double CellRunoff = 0.; // actual cell runoff generated within the cell
     double cellArea = 0., transportedVolume = 0., dailyRiverEvapo = 0.;
     double inflow = 0., inflowUpstream = 0., totalInflow = 0., outflow = 0., maxStorage = 0.;
@@ -1725,11 +1655,16 @@ void routingClass::routing(const short year, short day, short month, const short
     short b = 0; // counters for nSpecBasins (avoid dynamic memory allocation)
     double potCellRunoff = 0.;
 
+    //for water temp calculation
+    double outflowlocLake = 0.;
+    double outflowlocWetl = 0.;
+    double outflowGloLake = 0.;
+    double outflowGloWetland = 0.;
+
     double Kswbgw = 10.; // constant groundwater recharge below surface water bodies in mm/d --> 10 mm per day as gwr
 
     double fswbFracCorr = 0.; // correction for swb (loclak, locwet, glowet) if riverAreaFrac can not be satisfied
     double riverAreaFracDeficit = 0.; //to correct river area fraction if necessary
-    extern short G_aindex[ng]; // to get info about arid cells in a first approach
 
 
     // open water PET reduction (2.1f)
@@ -1751,183 +1686,88 @@ void routingClass::routing(const short year, short day, short month, const short
     // Reservoir operation start years
     // Homogenized index n to general b for "nSpecBasins"
     for (b = 0; b < nSpecBasins; b++) {
-        dailyRiverDischarge[b][day - 1] = 0.;
+        dailyRiverDischarge(b,day - 1) = 0.;
         if (options.day_store == 1) {
-            dailyLocLakeStorage[b][day - 1] = 0.;
-            dailyLocWetlStorage[b][day - 1] = 0.;
-            dailyGloLakeStorage[b][day - 1] = 0.;
-            dailyGloWetlStorage[b][day - 1] = 0.;
-            dailyRiverVelocity[b][day - 1] = 0.;    // velocity
+            dailyLocLakeStorage(b,day - 1) = 0.;
+            dailyLocWetlStorage(b,day - 1) = 0.;
+            dailyGloLakeStorage(b,day - 1) = 0.;
+            dailyGloWetlStorage(b,day - 1) = 0.;
+            dailyRiverVelocity(b,day - 1) = 0.;    // velocity
             if (options.resOpt == 1)
-                dailyResStorage[b][day - 1] = 0.;
+                dailyResStorage(b,day - 1) = 0.;
         }
         // end if options.day_store == 1
     }
     // end loop over nSpecBasins
 
+    //AEMS:
+    //#pragma omp parallel for shared(G_localRunoff, G_localGWRunoff, dailyWaterBalance, geo, options, month)
 
-#pragma omp parallel for private() \
-                shared(G_localRunoff, G_localGWRunoff, G_dailyLocalSurfaceRunoff, G_dailyStorageTransfer, dailyWaterBalance, geo, options, month)
+    if ((additionalOutIn.additionalfilestatus == 1) && (1 == readinstatus)) {
 
-    // computation of GW storage and baseflow for options.aridareaOpt == 0
-    if (0 == options.aridareaOpt) {
-        // Loop over grid cells
         for (int n = 0; n < ng; n++) {
 
-            // Only execute for continental grid cells
-            if (geo.G_contcell[n]) {
-                // Efficiency enhancement through local copies instead of often used method getValue // FP
-                double P_GWOUTF_C__at__n_aridareaOpt = calibParam.getValue(P_GWOUTF_C, n);
-
-                // transform runoff into desired units
-                cellArea = geo.areaOfCellByArrayPos(n);
-
-                G_groundwaterStoragePrevStep = G_groundwaterStorage[n];
-
-                // WG22b: ODE (ordinary differential equation) is applied for groundwater storage: dS/dt = GWR - NAg - k*S  (k*S = groundwater_runoff_km3)
-
-                netGWin = dailyWaterBalance.G_dailyGwRecharge[n] * cellArea * (G_landAreaFrac[n] / 100.) /
-                          1000000.;        // mm -> km3
-                // If G_landAreaFrac[n] == 0 in this timestep, G_dailyGwRecharge[n] has been set to 0 in daily.cpp.
-
-                // G_dailydailyNUg is adapted in this timestep based on the remaining use of last time step
-                if (options.subtract_use > 0) {
-                    if (G_dailyRemainingUse[n] != 0) {
-                        G_dailydailyNUg[n] = updateNetAbstractionGW(n, month);
-                    }
-                    netGWin -= G_dailydailyNUg[n];
-                }
-
-                // Analytical solution of dS/dt = netGWR - k*S
-                // k_g in [1/d]
-                // Cell-specific calibration parameters - Use parameter  // FP
-
-                G_groundwaterStorage[n] = G_groundwaterStoragePrevStep * exp(-1. * P_GWOUTF_C__at__n_aridareaOpt) +
-                                          (1. / P_GWOUTF_C__at__n_aridareaOpt) * netGWin *
-                                          (1. - exp(-1. * P_GWOUTF_C__at__n_aridareaOpt));
-
-                groundwater_runoff_km3 = G_groundwaterStoragePrevStep - G_groundwaterStorage[n] + netGWin;
-
-                if (groundwater_runoff_km3 <=
-                    0.) {    // different differential equation (ODE) applies: dS/dt = GWR - NAg (without k*S) -> S(t) = S(t-1) + netGWin
-
-                    groundwater_runoff_km3 = 0.;
-
-                    G_groundwaterStorage[n] = G_groundwaterStoragePrevStep + netGWin;
-                }
-                if ((2 == options.grid_store) || (4 == options.grid_store) || (6 == options.grid_store))
-                    G_monthlyGwRunoff[n][month] += groundwater_runoff_km3;
-                //if daily 365 output and gwout (same for 31; same for land area fraction)
-                //G_daily365GwRunoff[n][day - 1] = groundwater_runoff_km3;
-
-                // CR 2015-08: If landAreaFraction == 0., the remaining canopy, snow, and soil storage from the previous timestep becomes surface runoff (see daily.cpp).
-                if (G_landAreaFrac[n] == 0.) {
-                    dailyLocalSurfaceRunoff = dailyWaterBalance.G_dailyStorageTransfer[n] * cellArea / 1000000. *
-                                              G_landAreaFracPrevTimestep[n] / 100.;
-                } else {
-                    dailyLocalSurfaceRunoff = dailyWaterBalance.G_dailyLocalSurfaceRunoff[n] * cellArea / 1000000. *
-                                              G_landAreaFrac[n] / 100.;
-                }
-
-
-                if (1 ==
-                    options.fractionalRoutingOpt) { // only a fraction (depending on amount of surface water bodies) of surface and groundwater runoff should go to the local lakes later, rest should go directly to the river
-                    G_fswb_catchment[n] = G_fswbInit[n] *
-                                          20.;                  // G_fswb_catchment[n] = G_fswb[n] * 5.; // add a catchment area to surface water bodies (specified as x times the size of swb)...
-                    if (G_fswb_catchment[n] > 1.) // ... and prevent that G_fswb is greater then 1
-                        G_fswb_catchment[n] = 1.;
-                    if (G_aindex[n] == 1) {// in semi-arid/arid areas, all groundwater reaches the river directly
-                        G_localGWRunoffIntoRiver[n] = groundwater_runoff_km3;
-                    } else // in humid areas, groundwater is also routed through surface water bodies
-                        G_localGWRunoffIntoRiver[n] = (1. - G_fswb_catchment[n]) * groundwater_runoff_km3;
-
-                    if (G_aindex[n] == 0) // route groundwater only through surface water bodies in humid regions
-                        G_localGWRunoff[n] = G_fswb_catchment[n] * groundwater_runoff_km3;
-
-                    else
-                        G_localGWRunoff[n] = 0.; // in arid regions, all groundwater flows directly to the river
-
-                    // Firstly, amount of local runoff flowing directly into the river is calculated, then local gw runoff is added for the rest term.
-                    //G_localRunoffIntoRiver[n] = (1. - G_fswb_catchment[n]) * dailyWaterBalance.G_dailyLocalSurfaceRunoff[n]
-                    //        * cellArea / 1000000. * G_landAreaFrac[n] / 100.;
-                    G_localRunoffIntoRiver[n] = (1. - G_fswb_catchment[n]) *
-                                                dailyLocalSurfaceRunoff;    // dailyLocalSurfaceRunoff in km3
-
-                    G_localRunoff[n] = G_fswb_catchment[n] * dailyLocalSurfaceRunoff + G_localGWRunoff[n];
-
-
-                } else {    //normal version (without fractional routing)
-                    // G_dailyLocalRunoff is devided in G_dailyLocalGWRunoff and G_dailyLocalSurfaceRunoff
-                    // values are for land area only
-
-                    G_localGWRunoff[n] = groundwater_runoff_km3;
-
-                    G_localRunoff[n] = dailyLocalSurfaceRunoff + G_localGWRunoff[n];
-
-                }
-
-                // river storage is calculated in km3 instead of mm
-                // this makes transport between cells much more easy.
-                // therefore area/1000000.0
-                //
-                // WG22b: timeStepsPerDay removed from equations.
-
-                // the division by timeStepsPerDay is done*/
-                // so that this array contains the value which has
-                // to be added during each time step of
-                // the routing algorithm.
-                //
-
-                // dailyWaterBalance.G_lakeBalance[n] /= timeStepsPerDay; // HMS 2014-06-04 G_lakeBalance reintroduced
-                // added for open water PET reduction (2.1f)
-                // not needed anymore (as timeStepsPerDay is now 1 (analytical solution of ODE)
-                // dailyWaterBalance.G_openWaterPrec[n] /= (double) timeStepsPerDay;
-                // dailyWaterBalance.G_openWaterPET[n] /= (double) timeStepsPerDay;
-
-                // to be changed for fractionalrouting option (normal routing without G_localRunffIntoRiver and G_localRGWRunoffIntoRiver
-                // reintroduced for CFA calculation
-                potCellRunoff = (G_localRunoff[n] + G_localRunoffIntoRiver[n] +
-                                 G_localGWRunoffIntoRiver[n]    // is in km3
-                                 + ((dailyWaterBalance.G_lakeBalance[n]    // is in mm
-                                     / 1000000.0)    // mm -> km3
-                                    * (((double) G_lake_area[n] + (double) G_reservoir_area[n])    // km2
-                                       + ((geo.areaOfCellByArrayPos(n) / 100.0)    // % -> km2
-                                          * (G_loc_lake[n] + G_loc_wetland[n] + G_glo_wetland[n])))));    // [%]
-
-                G_potCellRunoff[n] += potCellRunoff;
-                if (2 == options.grid_store) {
-                    G_monthlyPotCellRunoff[n][month] += potCellRunoff;
-                }
-
-
-
-
-            }
-            // endif (geo.G_contcell[n]) [only execute for continental cells]
-
-        } // end loop over all cells [n]
-
-    } // end of computation of GW storage and baseflow for options.aridareaOpt == 0
-
-#ifdef _WATERGAP_CHECKS_GLOBAL_H
-                                                                                                                            // Check Felix Portmann 2015 - for invalid data
-        if ( (year >= chk_year) && (month >= chk_month) && (day_in_month >= chk_day_in_month) ) {
-
-            check_array_double_LT0_YYMMDD(G_localRunoff, ng, year, month, day_in_month);
-            check_array_double_LT0_YYMMDD(G_localRunoffIntoRiver, ng, year, month, day_in_month);
-            check_array_double_LT0_YYMMDD(G_localGWRunoff, ng, year, month, day_in_month);
-            check_array_double_LT0_YYMMDD(G_localGWRunoffIntoRiver, ng, year, month, day_in_month);
-
-            check_array_double_NaN_YYMMDD(G_localRunoff, ng, year, month, day_in_month);
-            check_array_double_NaN_YYMMDD(G_localRunoffIntoRiver, ng, year, month, day_in_month);
-            check_array_double_NaN_YYMMDD(G_localGWRunoff, ng, year, month, day_in_month);
-            check_array_double_NaN_YYMMDD(G_potCellRunoff, ng, year, month, day_in_month);
-
-            check_array_double_NaN_YYMMDD(G_localGWRunoffIntoRiver, ng, year, month, day_in_month);
+            // G_locWetlAreaReductionFactor[n] = additionalOutIn.additionalOutputInput(n, 8);
+            // G_gloLakeEvapoReductionFactor[n] = additionalOutIn.additionalOutputInput(n, 9);
+            // G_groundwaterStorage[n] = additionalOutIn.additionalOutputInput(n, 10);
+            // G_locLakeAreaReductionFactor[n] = additionalOutIn.additionalOutputInput(n, 11);
+            // G_gloWetlAreaReductionFactor[n] = additionalOutIn.additionalOutputInput(n, 12);
+            // G_gloResEvapoReductionFactor[n] = additionalOutIn.additionalOutputInput(n, 13);
+            //G_fswbInit[n] = additionalOutIn.additionalOutputInput(n, 14);
+            // G_gloWetlStorage[n] = additionalOutIn.additionalOutputInput(n, 15);
+            // G_fswbLandAreaFrac[n] = additionalOutIn.additionalOutputInput(n, 16);
+            // G_locWetlStorage[n] = additionalOutIn.additionalOutputInput(n, 17);
+            // G_locLakeStorage[n] = additionalOutIn.additionalOutputInput(n, 18);
+            // G_riverStorage[n] = additionalOutIn.additionalOutputInput(n, 19);
+            // G_gloLakeStorage[n] = additionalOutIn.additionalOutputInput(n, 21);
+            // G_gloResStorage[n] = additionalOutIn.additionalOutputInput(n, 23);
+            G_UnsatAllocUse[n] = additionalOutIn.additionalOutputInput(n, 27);
+            G_AllocatedUse[n] = additionalOutIn.additionalOutputInput(n, 28);
+            G_SecondCell[n] = additionalOutIn.additionalOutputInput(n, 29);
+            G_daily_allocatedUseNextDay[n] = additionalOutIn.additionalOutputInput(n, 31);
+            G_daily_UnsatAllocUseNextDay[n] = additionalOutIn.additionalOutputInput(n, 30);
+            G_AllocUseToNeigborCell[n] = additionalOutIn.additionalOutputInput(n, 32);
+            // G_fswbLandAreaFracNextTimestep[n] = additionalOutIn.additionalOutputInput(n, 33);
+            G_PrevUnsatAllocUse[n] = additionalOutIn.additionalOutputInput(n, 34);
+            G_dailyRemainingUse[n] = additionalOutIn.additionalOutputInput(n, 35);
+            G_fGloLake[n] = additionalOutIn.additionalOutputInput(n, 36);
+            G_PrevTotalUnstatisfiedUse[n] = additionalOutIn.additionalOutputInput(n, 37);
+            G_dailySatisAllocatedUseInSecondCell[n] = additionalOutIn.additionalOutputInput(n, 40);
+            G_dailyAllocatedUse[n] = additionalOutIn.additionalOutputInput(n, 41);
+            G_unsatUseRiparian[n] = additionalOutIn.additionalOutputInput(n, 42);
+            G_withdrawalIrrigFromSwb[n] = additionalOutIn.additionalOutputInput(n, 25) ;
+            G_consumptiveUseIrrigFromSwb[n] = additionalOutIn.additionalOutputInput(n, 26) ;
 
         }
-        // endif checks
-#endif
+
+    }
+    // Only for runs which consider glaciers
+    if (options.glacierOpt == 1) {
+        for (int n = 0; n < ng; n++) {
+
+            if (glacierYear.G_glacier_mass_change_d365(n,day - 1) > glacierYear.G_precipitation_on_glacier_d365(n,day - 1)) {
+                // If input glacier mass change is larger than input precipitation on glacier area,
+                // increase precipitation on glacier area by the difference (necessary to avoid
+                // negative values when calculating glacier runoff and to close the water budget)
+                G_glacPrecip[n] = glacierYear.G_precipitation_on_glacier_d365(n,day - 1) -
+                               (glacierYear.G_precipitation_on_glacier_d365(n,day - 1) - glacierYear.G_glacier_mass_change_d365(n,day - 1));
+            } else
+                G_glacPrecip[n] = glacierYear.G_precipitation_on_glacier_d365(n,day - 1);
+
+            if (G_glacAdaptedArea[n] > 0.) { // for glacierized cells only
+                G_glacRunoff[n] = G_glacPrecip[n] - glacierYear.G_glacier_mass_change_d365(n,day - 1); // calculate glacier runoff
+            } else
+                G_glacRunoff[n] = 0.;
+
+            G_glacierStorage[n] += glacierYear.G_glacier_mass_change_d365(n,day - 1);  // G_glacierStorage is equal to cumulated input glacier mass change
+
+            G_monthlyGlacierArea(n,month) = G_glacAdaptedArea[n];
+            G_monthlyGlacierAreaFrac(n,month) = G_glacAreaFrac[n];
+            G_monthlyGlacierRunoff(n,month) += G_glacRunoff[n];
+            G_monthlyGlacierPrecip(n,month) += G_glacPrecip[n];
+        } // end loop over grid cells
+    } //end if glacierOpt
+
 
     for (int n = 0; n < ng; n++) {
         cellArea = geo.areaOfCellByArrayPos(n);
@@ -1946,6 +1786,7 @@ void routingClass::routing(const short year, short day, short month, const short
         G_daily_res_out[n] = 0.;
         G_locwetlextent[n] = 0.;
         G_glowetlextent[n] = 0.;
+        G_transportedVolume_for_AET[n] = 0.;
 
 
         // WG22b (option 'use_alloc'): MaxStorage of local lakes and global lakes
@@ -1974,6 +1815,7 @@ void routingClass::routing(const short year, short day, short month, const short
 
     double remainingUse = 0., dailyUse = 0., totalDesiredUse = 0., totalNeighbourStorage = 0., totalDesiredUseCell = 0.;
     double daily_allocatedUseNextDay = 0., daily_UnsatAllocUseNextDay = 0., dailyActualUse = 0., demandWithoutAllocUse = 0., unsatAllocUse = 0., unsatUse = 0.;
+    double unsatGLWDUseOfRiparians = 0.; // unsatisfied NAs which steem of riparian cells and is reallocated to riparian (not outflow) cells of global lakes or reservoirs
     //introduced in WG2.2b to implement NUs into storage equations:
     double PETgwrRemUseMax = 0., PETgwrRemUse = 0., RiverEvapoRemUse = 0., RivEvapoRemUseMax = 0.;
     //introduced for the new approach in WG2.2b to abstract 50% of NUs from each SWB, if both SWB exist:
@@ -1994,10 +1836,9 @@ void routingClass::routing(const short year, short day, short month, const short
 
             // added for new routing order in Wg2.2 // moved some lines up
             int n = (G_routingCell[routingCell] - 1);
-
             // Efficiency enhancement through local copies instead of often used method getValue
-            double P_GWOUTF_C__at__n_routing = calibParam.getValue(P_GWOUTF_C, n);
-            double M_EVAREDEX__at__n_routing = calibParam.getValue(M_EVAREDEX, n);
+            double P_GWOUTF_C__at__n_routing = calParam.getValue(P_GWOUTF_C, n);
+            double M_EVAREDEX__at__n_routing = calParam.getValue(M_EVAREDEX, n);
 
             if (options.use_alloc > 0)
                 G_CellPositionRoutOrder[n] = routingCell;
@@ -2027,6 +1868,11 @@ void routingClass::routing(const short year, short day, short month, const short
 
             daily_totalUnsatisfiedUse = 0.;
 
+            //for water temp calculation
+            outflowlocLake = 0.;
+            outflowlocWetl = 0.;
+            outflowGloLake = 0.;
+            outflowGloWetland = 0.;
 
             // Only execute for continental grid cells
             if (geo.G_contcell[n]) {
@@ -2036,7 +1882,7 @@ void routingClass::routing(const short year, short day, short month, const short
 
                 // If landAreaFraction == 0., the remaining canopy, snow, and soil storage from the previous timestep
                 // becomes surface runoff (see daily.cpp).
-                if (G_landAreaFrac[n] == 0.) {
+                if (G_landAreaFrac[n] <= 0.) {
                     dailyLocalSurfaceRunoff = dailyWaterBalance.G_dailyStorageTransfer[n] * cellArea / 1000000. *
                                               G_landAreaFracPrevTimestep[n] / 100.;
                 } else {
@@ -2049,26 +1895,88 @@ void routingClass::routing(const short year, short day, short month, const short
                 // and before the river in (semi-)arid cells (baseflow directed into river)
 
                 // Calculate fswb*Rs and (a-fswb)*Rs for arid cells for Options fractionalRouting and gwr_swb:
-
-                if ((1 == options.aridareaOpt) && (1 == G_aindex[n])) {    // (semi-)arid cells
-
+                if (options.fractionalRoutingOpt && G_LDD[n] >= 0){
                     G_fswb_catchment[n] = G_fswbInit[n] *
                                           20.;    // G_fswb_catchment[n] = G_fswb[n] * 5.; // add a catchment area to surface water bodies (specified as x times the size of swb)...
 
                     if (G_fswb_catchment[n] > 1.) // ... and prevent that G_fswb is greater then 1
                         G_fswb_catchment[n] = 1.;
 
-
+                    // Firstly, amount of local runoff flowing directly into the river is calculated, then local gw runoff is added for the rest term.
                     G_localRunoffIntoRiver[n] = (1. - G_fswb_catchment[n]) *
                                                 dailyLocalSurfaceRunoff;    // dailyLocalSurfaceRunoff in km3
+                }
+
+                if ((1 == options.fractionalRoutingOpt) && (1 == G_aindex[n]) && (G_LDD[n] >= 0)) {    // (semi-)arid cells except inland sinks; fractionalRoutingOpt automatically set to 1 if aridareaOpt == 1
+
+
+                    G_localGWRunoff[n] = 0.; // in arid regions, no GW flow into surface water bodies
 
                     G_localRunoff[n] = G_fswb_catchment[n] * dailyLocalSurfaceRunoff;
 
+                    // Only for runs which consider glaciers
+                    if ((options.glacierOpt == 1) && (G_glacRunoff[n] > 0.)) { // for glacierized cells only
+                        // Add a fraction of glacier runoff to local runoff flowing directly into the river and route the rest through SWB
+                        G_localRunoffIntoRiver[n] += (1. - G_fswb_catchment[n]) * G_glacRunoff[n];
+                        G_localRunoff[n] += G_fswb_catchment[n] * G_glacRunoff[n];
+                    }
+
+                    if (options.aridareaOpt == 0){
+                        G_groundwaterStoragePrevStep = G_groundwaterStorage[n];
+                        netGWin = dailyWaterBalance.G_dailyGwRecharge[n] * cellArea * (G_landAreaFrac[n] / 100.) /
+                                  1000000.;        // mm -> km3
+                        // G_dailydailyNUg is adapted in this timestep based on the remaining use of last time step
+                        if (options.subtract_use > 0) {
+                            if (G_dailyRemainingUse[n] != 0.) {
+                                G_dailydailyNUg[n] = updateNetAbstractionGW(n);
+                            }
+                            netGWin -= G_dailydailyNUg[n];
+                        }
+
+                        // Analytical solution of dS/dt = netGWR - k*S
+                        // k_g in [1/d]
+                        // Cell-specific calibration parameters - Use parameter  // FP
+
+                        G_groundwaterStorage[n] = G_groundwaterStoragePrevStep * exp(-1. * P_GWOUTF_C__at__n_routing) +
+                                                  (1. / P_GWOUTF_C__at__n_routing) * netGWin *
+                                                  (1. - exp(-1. * P_GWOUTF_C__at__n_routing));
+
+                        if(abs(G_groundwaterStorage[n])<=minStorVol)    //to counter numerical inaccuracies
+                            G_groundwaterStorage[n]=0.;
+
+                        groundwater_runoff_km3 = G_groundwaterStoragePrevStep - G_groundwaterStorage[n] + netGWin;
+                        if (groundwater_runoff_km3 <=
+                            0.) {    // different differential equation (ODE) applies: dS/dt = GWR - NAg (without k*S) -> S(t) = S(t-1) + netGWin
+
+                            groundwater_runoff_km3 = 0.;
+
+                            G_groundwaterStorage[n] = G_groundwaterStoragePrevStep + netGWin;
+
+                            if(abs(G_groundwaterStorage[n])<=minStorVol)    //to counter numerical inaccuracies
+                                G_groundwaterStorage[n]=0.;
+
+                        }
+                        if ((2 == options.grid_store) || (4 == options.grid_store) || (6 == options.grid_store))
+                            G_monthlyGwRunoff(n,month) += groundwater_runoff_km3;
+                        G_localGWRunoffIntoRiver[n] = groundwater_runoff_km3;
+                        potCellRunoff = (G_localRunoff[n] + G_localRunoffIntoRiver[n] +
+                                         G_localGWRunoffIntoRiver[n]    // is in km3
+                                         + ((dailyWaterBalance.G_lakeBalance[n]    // is in mm
+                                             / 1000000.0)    // mm -> km3
+                                            * (((double) G_lake_area[n] + (double) G_reservoir_area[n])    // km2
+                                               + ((geo.areaOfCellByArrayPos(n) / 100.0)    // % -> km2
+                                                  * (G_loc_lake[n] + G_loc_wetland[n] + G_glo_wetland[n])))));    // [%]
+
+                        G_potCellRunoff[n] += potCellRunoff;
+                        if (2 == options.grid_store) {
+                            G_monthlyPotCellRunoff(n,month) += potCellRunoff;
+                        }
+
+                    }
                 }
 
                 // Calculate baseflow, runoff into local lakes and direct runoff into river for humid cells:
-
-                if ((1 == options.aridareaOpt) && (0 == G_aindex[n])) {    // humid cells only
+                if ((1 == options.fractionalRoutingOpt) && (0 == G_aindex[n]) && (G_LDD[n] >= 0)) {    // humid cells only (except for inland sinks)
 
                     G_groundwaterStoragePrevStep = G_groundwaterStorage[n];
 
@@ -2081,8 +1989,8 @@ void routingClass::routing(const short year, short day, short month, const short
 
                     // G_dailydailyNUg is adapted in this time step based on the remaining use of last time step
                     if (options.subtract_use > 0) {
-                        if (G_dailyRemainingUse[n] != 0) {
-                            G_dailydailyNUg[n] = updateNetAbstractionGW(n, month);
+                        if (G_dailyRemainingUse[n] != 0.) {
+                            G_dailydailyNUg[n] = updateNetAbstractionGW(n);
                         }
                         netGWin -= G_dailydailyNUg[n];
                     }
@@ -2095,6 +2003,9 @@ void routingClass::routing(const short year, short day, short month, const short
                                               (1. / P_GWOUTF_C__at__n_routing) * netGWin *
                                               (1. - exp(-1. * P_GWOUTF_C__at__n_routing));
 
+                    if(abs(G_groundwaterStorage[n])<=minStorVol)    //to counter numerical inaccuracies
+                        G_groundwaterStorage[n]=0.;
+
                     groundwater_runoff_km3 = G_groundwaterStoragePrevStep - G_groundwaterStorage[n] + netGWin;
 
                     if (groundwater_runoff_km3 <=
@@ -2104,52 +2015,31 @@ void routingClass::routing(const short year, short day, short month, const short
                         groundwater_runoff_km3 = 0.;
 
                         G_groundwaterStorage[n] = G_groundwaterStoragePrevStep + netGWin;
+
+                        if(abs(G_groundwaterStorage[n])<=minStorVol)    //to counter numerical inaccuracies
+                            G_groundwaterStorage[n]=0.;
+
                     }
                     if ((2 == options.grid_store) || (4 == options.grid_store) || (6 == options.grid_store))
-                        G_monthlyGwRunoff[n][month] += groundwater_runoff_km3;
-                    //if daily 365 output and gwout (same for 31; same for land area fraction)
-                    //G_daily365GwRunoff[n][day - 1] = groundwater_runoff_km3;
+                        G_monthlyGwRunoff(n,month) += groundwater_runoff_km3;
 
-                    if (1 ==
-                        options.fractionalRoutingOpt) {    // only a fraction (depending on amount of surface water bodies) of surface and groundwater runoff should go to the local lakes later, rest should go directly to the river
+                    // in humid areas, groundwater is also routed through surface water bodies
+                    G_localGWRunoffIntoRiver[n] = (1. - G_fswb_catchment[n]) * groundwater_runoff_km3;
 
-                        G_fswb_catchment[n] = G_fswbInit[n] *
-                                              20.;                  // G_fswb_catchment[n] = G_fswb[n] * 5.; // add a catchment area to surface water bodies (specified as x times the size of swb)...
-                        if (G_fswb_catchment[n] > 1.) // ... and prevent that G_fswb is greater then 1
-                            G_fswb_catchment[n] = 1.;
-
-                        if (G_aindex[n] ==
-                            1) {                                        // in semi-arid/arid areas, all groundwater reaches the river directly
-                            G_localGWRunoffIntoRiver[n] = groundwater_runoff_km3;
-                        } else // in humid areas, groundwater is also routed through surface water bodies
-                            G_localGWRunoffIntoRiver[n] = (1. - G_fswb_catchment[n]) * groundwater_runoff_km3;
-
-                        if (G_aindex[n] == 0) // route groundwater only through surface water bodies in humid regions
-                            G_localGWRunoff[n] = G_fswb_catchment[n] * groundwater_runoff_km3;
-
-                        else
-                            G_localGWRunoff[n] = 0.; // in arid regions, all groundwater flows directly to the river
+                    // route groundwater through surface water bodies in humid regions
+                    G_localGWRunoff[n] = G_fswb_catchment[n] * groundwater_runoff_km3;
 
 
-                        G_localRunoffIntoRiver[n] = (1. - G_fswb_catchment[n]) *
-                                                    dailyLocalSurfaceRunoff;    // dailyLocalSurfaceRunoff in km3
+                    G_localRunoff[n] = (G_fswb_catchment[n] * dailyLocalSurfaceRunoff) + G_localGWRunoff[n];
 
-                        G_localRunoff[n] = (G_fswb_catchment[n] * dailyLocalSurfaceRunoff) + G_localGWRunoff[n];
-
-                    } else {    // normal version (without fractional routing)
-                        // G_dailyLocalRunoff is devided in G_dailyLocalGWRunoff and G_dailyLocalSurfaceRunoff
-                        // values are for land area only
-                        if ((G_aindex[n] == 1) && (options.aridareaOpt ==
-                                                   1))    // in semi-arid/arid areas, all groundwater reaches the river directly
-                            G_localGWRunoffIntoRiver[n] = groundwater_runoff_km3;
-                        else
-                            G_localGWRunoff[n] = groundwater_runoff_km3;
-
-                        G_localRunoff[n] = dailyLocalSurfaceRunoff + G_localGWRunoff[n];
+                    // Only for runs which consider glaciers
+                    if ((options.glacierOpt == 1) && (G_glacRunoff[n] > 0.)) { // for glacierized cells only
+                        // Add a fraction of glacier runoff to local runoff flowing directly into the river and route the rest through SWB
+                        G_localRunoffIntoRiver[n] += (1. - G_fswb_catchment[n]) * G_glacRunoff[n];
+                        G_localRunoff[n] += G_fswb_catchment[n] * G_glacRunoff[n];
                     }
 
 
-                    // to be changed for fractionalrouting option (normal routing without G_localRunffIntoRiver and
                     // G_localRGWRunoffIntoRiver
                     // reintroduced for CFA calculation
                     potCellRunoff = (G_localRunoff[n] + G_localRunoffIntoRiver[n] +
@@ -2163,12 +2053,142 @@ void routingClass::routing(const short year, short day, short month, const short
                     G_potCellRunoff[n] += potCellRunoff;
 
                     if (2 == options.grid_store) {
-                        G_monthlyPotCellRunoff[n][month] += potCellRunoff;
+                        G_monthlyPotCellRunoff(n,month) += potCellRunoff;
                     }
 
                 }    // end of computation of GW storage and baseflow for options.aridareaOpt == 1 in humid cells
 
+                if ((0 == options.fractionalRoutingOpt) && (0 == options.aridareaOpt) && (G_LDD[n] >= 0)) {
 
+
+                    G_localRunoff[n] = dailyLocalSurfaceRunoff;
+                    // Only for runs which consider glaciers
+                    if ((options.glacierOpt == 1) && (G_glacRunoff[n] > 0.)) { // for glacierized cells only
+                        // Add a fraction of glacier runoff to local runoff flowing directly into the river and route the rest through SWB
+                        G_localRunoff[n] += G_glacRunoff[n];
+                    }
+
+                    G_groundwaterStoragePrevStep = G_groundwaterStorage[n];
+                    netGWin = dailyWaterBalance.G_dailyGwRecharge[n] * cellArea * (G_landAreaFrac[n] / 100.) /
+                                   1000000.;        // mm -> km3
+
+                                   // G_dailydailyNUg is adapted in this timestep based on the remaining use of last time step
+                                   if (options.subtract_use > 0) {
+                                       if (G_dailyRemainingUse[n] != 0) {
+                                           G_dailydailyNUg[n] = updateNetAbstractionGW(n);
+                                       }
+                                       netGWin -= G_dailydailyNUg[n];
+                                   }
+
+                                   // Analytical solution of dS/dt = netGWR - k*S
+                                   // k_g in [1/d]
+                                   // Cell-specific calibration parameters - Use parameter  // FP
+
+                                   G_groundwaterStorage[n] = G_groundwaterStoragePrevStep * exp(-1. * P_GWOUTF_C__at__n_routing) +
+                                                  (1. / P_GWOUTF_C__at__n_routing) * netGWin *
+                                                  (1. - exp(-1. * P_GWOUTF_C__at__n_routing));
+
+                    if(abs(G_groundwaterStorage[n])<=minStorVol)    //to counter numerical inaccuracies
+                        G_groundwaterStorage[n]=0.;
+
+                                   groundwater_runoff_km3 = G_groundwaterStoragePrevStep - G_groundwaterStorage[n] + netGWin;
+                                   if (groundwater_runoff_km3 <=
+                                   0.) {    // different differential equation (ODE) applies: dS/dt = GWR - NAg (without k*S) -> S(t) = S(t-1) + netGWin
+
+                                       groundwater_runoff_km3 = 0.;
+
+                                       G_groundwaterStorage[n] = G_groundwaterStoragePrevStep + netGWin;
+
+                                       if(abs(G_groundwaterStorage[n])<=minStorVol)    //to counter numerical inaccuracies
+                                           G_groundwaterStorage[n]=0.;
+
+                                   }
+                                   if ((2 == options.grid_store) || (4 == options.grid_store) || (6 == options.grid_store))
+                                       G_monthlyGwRunoff(n,month) += groundwater_runoff_km3;
+                                   G_localGWRunoff[n] = groundwater_runoff_km3;
+                                   G_localRunoff[n] += G_localGWRunoff[n];
+                                   potCellRunoff = (G_localRunoff[n] + G_localGWRunoff[n]    // is in km3
+                                                  + ((dailyWaterBalance.G_lakeBalance[n]    // is in mm
+                                                  / 1000000.0)    // mm -> km3
+                                                  * (((double) G_lake_area[n] + (double) G_reservoir_area[n])    // km2
+                                                  + ((geo.areaOfCellByArrayPos(n) / 100.0)    // % -> km2
+                                                  * (G_loc_lake[n] + G_loc_wetland[n] + G_glo_wetland[n])))));    // [%]
+
+                                                  G_potCellRunoff[n] += potCellRunoff;
+                                                  if (2 == options.grid_store) {
+                                                      G_monthlyPotCellRunoff(n,month) += potCellRunoff;
+                                                  }
+
+                }
+                if (G_LDD[n] < 0) { // in all inland sinks
+
+                    G_groundwaterStoragePrevStep = G_groundwaterStorage[n];
+
+                    // WG22b: ODE (ordinary differential equation) is applied for groundwater storage: dS/dt = GWR - NAg - k*S  (k*S = groundwater_runoff_km3)
+
+                    netGWin = dailyWaterBalance.G_dailyGwRecharge[n] * cellArea * (G_landAreaFrac[n] / 100.) /
+                              1000000.;        // mm -> km3
+                    // G_dailydailyNUg is adapted in this timestep based on the remaining use of last time step
+                    if (options.subtract_use > 0) {
+                        if (G_dailyRemainingUse[n] != 0.) {
+                            G_dailydailyNUg[n] = updateNetAbstractionGW(n);
+                        }
+                        netGWin -= G_dailydailyNUg[n];
+                    }
+
+                    // Analytical solution of dS/dt = netGWR - k*S
+                    // k_g in [1/d]
+                    // Cell-specific calibration parameters - Use parameter  // FP
+
+                    G_groundwaterStorage[n] = G_groundwaterStoragePrevStep * exp(-1. * P_GWOUTF_C__at__n_routing) +
+                                              (1. / P_GWOUTF_C__at__n_routing) * netGWin *
+                                              (1. - exp(-1. * P_GWOUTF_C__at__n_routing));
+
+                    if(abs(G_groundwaterStorage[n])<=minStorVol)    //to counter numerical inaccuracies
+                        G_groundwaterStorage[n]=0.;
+
+                    groundwater_runoff_km3 = G_groundwaterStoragePrevStep - G_groundwaterStorage[n] + netGWin;
+
+                    if (groundwater_runoff_km3 <=
+                        0.) {    // different differential equation (ODE) applies: dS/dt = GWR - NAg (without k*S) -> S(t) = S(t-1) + netGWin
+
+                        groundwater_runoff_km3 = 0.;
+
+                        G_groundwaterStorage[n] = G_groundwaterStoragePrevStep + netGWin;
+
+                        if(abs(G_groundwaterStorage[n])<=minStorVol)    //to counter numerical inaccuracies
+                            G_groundwaterStorage[n]=0.;
+
+                    }
+                    if ((2 == options.grid_store) || (4 == options.grid_store) || (6 == options.grid_store))
+                        G_monthlyGwRunoff(n,month) += groundwater_runoff_km3;
+
+                    // CR 2015-08: If landAreaFraction == 0., the remaining canopy, snow, and soil storage from the previous timestep becomes surface runoff (see daily.cpp).
+                    if (G_landAreaFrac[n] == 0.) {
+                        dailyLocalSurfaceRunoff = dailyWaterBalance.G_dailyStorageTransfer[n] * cellArea / 1000000. *
+                                                  G_landAreaFracPrevTimestep[n] / 100.;
+                    } else {
+                        dailyLocalSurfaceRunoff = dailyWaterBalance.G_dailyLocalSurfaceRunoff[n] * cellArea / 1000000. *
+                                                  G_landAreaFrac[n] / 100.;
+                    }
+
+                    G_localGWRunoff[n] = groundwater_runoff_km3;
+                    G_localRunoff[n] = dailyLocalSurfaceRunoff + G_localGWRunoff[n];
+                    if ((options.glacierOpt == 1) && (G_glacRunoff[n] > 0.)) // for glacierized cells only
+                        G_localRunoff[n] += G_glacRunoff[n]; // add glacier runoff to local runoff
+
+                    potCellRunoff = (G_localRunoff[n]     // is in km3
+                                     + ((dailyWaterBalance.G_lakeBalance[n]    // is in mm
+                                         / 1000000.0)    // mm -> km3
+                                        * (((double) G_lake_area[n] + (double) G_reservoir_area[n])    // km2
+                                           + ((geo.areaOfCellByArrayPos(n) / 100.0)    // % -> km2
+                                              * (G_loc_lake[n] + G_loc_wetland[n] + G_glo_wetland[n])))));    // [%]
+
+                    G_potCellRunoff[n] += potCellRunoff;
+                    if (2 == options.grid_store) {
+                        G_monthlyPotCellRunoff(n, month) += potCellRunoff;
+                    }
+                }
 
                 if (options.subtract_use > 0) {
 
@@ -2178,8 +2198,7 @@ void routingClass::routing(const short year, short day, short month, const short
                         // option for satisfaction of NUs of riparian cells of global lakes and reservoirs
                         if (options.aggrNUsGloLakResOpt == 1) {
 
-                            if (G_reservoir_area[n] > 0. ||
-                                G_lake_area[n] > 0.) {    // outflow cell of global lake and/or reservoir
+                            if (G_reservoir_area[n] > 0. || G_lake_area[n] > 0.) {    // outflow cell of global lake and/or reservoir
 
                                 dailyUse = G_dailydailyNUsAggregated[n];    // [km3/day]
 
@@ -2203,14 +2222,13 @@ void routingClass::routing(const short year, short day, short month, const short
                                 }
                             }
 
-                        } else {  // if options.aggrNUsGloLakResOpt == 0:
+                        } else {
 
                             // G_dailydailyNUs (surface water abstractions) can be negative (i.e. return flow to surface water bodies)
                             dailyUse = G_dailydailyNUs[n]; // [km3/day]
                             totalDesiredUseCell = G_dailydailyNUs[n]; // only required to redistribute remainingUse over riparian cells for option 'aggrNUsGloLakResOpt' (see above)
 
                         }
-                        // end estimation of dailyUse and totalDesiredUseCell
 
                         totalDesiredUse = dailyUse;
 
@@ -2236,7 +2254,7 @@ void routingClass::routing(const short year, short day, short month, const short
                             // Thus, G_AllocatedUse[n] and G_totalUnsatisfiedUse[n] are included in the storage
                             // equations of surface water bodies like dailydailyNUs.
                             // G_UnsatAllocUse[n] is the fraction of allocated use that could not be satisfied in a nbc
-                            // in the last timestep.
+                            // in the last timestep. Thus it is reallocated to cell n.
 
                             totalDesiredUse += G_UnsatAllocUse[n];
                             totalDesiredUseCell += G_UnsatAllocUse[n];
@@ -2277,12 +2295,9 @@ void routingClass::routing(const short year, short day, short month, const short
                     remainingUse = 0.;
                 }
 
-                // end "options.subtract_use"
-
                 // added for cell AET calculation (2.2)
                 // added for new routing algorithm WG2.2
                 // store value for surface water storages in previous time step
-
                 double G_riverStoragePrevStep = 0.;
                 double G_locLakeStoragePrevStep = 0.;
                 double G_locWetlStoragePrevStep = 0.;
@@ -2297,7 +2312,7 @@ void routingClass::routing(const short year, short day, short month, const short
                     cellArea = geo.areaOfCellByArrayPos(n);
 
                     // Efficiency enhancement through local copies instead of often used method getValue // FP
-                    double P_SWOUTF_C__at__n = calibParam.getValue(P_SWOUTF_C, n);
+                    double P_SWOUTF_C__at__n = calParam.getValue(P_SWOUTF_C, n);
 
                     // -------------- Routing through local lake ----------------------------------------------------
                     if (G_loc_lake[n] > 0.) {
@@ -2364,13 +2379,17 @@ void routingClass::routing(const short year, short day, short month, const short
                                        + (dailyWaterBalance.G_cellCorrFact[n]
                                           * (dailyWaterBalance.G_openWaterPET[n] * locLakeAreaReductionFactor));
 
+                        if (G_dailyLocLakeEvapo[n] < 0.) { // to avoid unphysical negative aet
+                            G_dailyLocLakeEvapo[n] = 0.;
+                        }
+
 
                         totalInflow = inflow + (dailyWaterBalance.G_openWaterPrec[n] * locLakeAreaReductionFactor)
                                                * (cellArea / 1000000.) * (G_loc_lake[n] / 100.);    //[mm]->[km3]
 
 
-                        // gwr below surface water bodies
-                        if ((1 == options.aridareaOpt) && (1 == G_aindex[n])) {
+                        // gwr below surface water bodies (except in arid inland sinks)
+                        if ((1 == options.aridareaOpt) && (1 == G_aindex[n]) && (G_LDD[n] >= 0)){
                             gwr_loclak[n] = Kswbgw * locLakeAreaReductionFactor * G_loc_lake[n] / 100. /
                                             (geo.G_contfreq[n] /
                                              100.); // gwr below local lakes in mm/d with respect to continental area
@@ -2384,6 +2403,9 @@ void routingClass::routing(const short year, short day, short month, const short
 
                         // Maximum amount of (openwaterPET + gwr_loclak) to ensure that G_locLakeStorage is always larger than -maxStorage:
                         PETgwrMax = G_locLakeStoragePrevStep + maxStorage + totalInflow;
+
+                        if (PETgwrMax < 0.) // avoids numeric problems when reading in and prevents that value gets negatively
+                            PETgwrMax = 0.;
 
                         if (PETgwr > PETgwrMax) {    // reduction of PET and gwr_locLak required
 
@@ -2414,16 +2436,10 @@ void routingClass::routing(const short year, short day, short month, const short
                         } else // if G_locLakeStoragePrevStep <= 0, no outflow should occur
                             outflow = 0.;
 
-                        // New approach in WG22b: In inland sinks, outflow from SWB flows into the river.
-                        // The computed transported volume /(= outflow of the river) represents the water resource of this cell and thus should not be zero (although
-                        // it cannot be assigned to a downstream cell). This value can be interpreted as either additional AET or river availability of the inland sink.
-                        /*if (G_LDD[n] == -1) {
-                            if (((G_glo_lake[n] + G_glo_wetland[n]) == 0) && (G_loc_wetland[n] == 0)) {
-                                outflow = 0.;
-                            }
-                        }*/
-
                         G_locLakeStorage[n] -= outflow;
+
+                        if(abs(G_locLakeStorage[n])<=minStorVol) //to counter numerical inaccuracies
+                            G_locLakeStorage[n]=0.;
 
                         // reduce G_locLakeStorage[n] to maximum storage capacity
                         if (G_locLakeStorage[n] > maxStorage) {
@@ -2446,7 +2462,7 @@ void routingClass::routing(const short year, short day, short month, const short
                         if (2 == options.grid_store)
                             // sum up the negative fraction of the potential cell runoff which has not been realized
                             // due to reduction of potential evaporation
-                            G_monthlyPotCellRunoffDeficit[n][month]
+                            G_monthlyPotCellRunoffDeficit(n,month)
                                            += (0.0 - dailyWaterBalance.G_openWaterPET[n] * PETgwrRedFactor
                                                      * (1.0 - locLakeAreaReductionFactor)
                                                      * dailyWaterBalance.G_cellCorrFact[n]
@@ -2455,6 +2471,7 @@ void routingClass::routing(const short year, short day, short month, const short
 
 
                         inflow = outflow;
+                        outflowlocLake = outflow;
 
                         // Area reduction factor is now calculated for the next day.
                         // Cell-specific calibration parameters - Apply multiplier
@@ -2495,14 +2512,18 @@ void routingClass::routing(const short year, short day, short month, const short
                                        + (dailyWaterBalance.G_cellCorrFact[n]
                                           * (dailyWaterBalance.G_openWaterPET[n] * locWetlAreaReductionFactor));
 
+                        if (G_dailyLocWetlEvapo[n] < 0.) { // avoid unphysical negative aet values
+                            G_dailyLocWetlEvapo[n] = 0.;
+                        }
+
+
+                        // calculate inflow only in dependence of reduction factor to avoid inconsistent counting of precipitation
                         totalInflow = inflow + (dailyWaterBalance.G_openWaterPrec[n] * locWetlAreaReductionFactor
                                                 * (cellArea / 1000000.) * (G_loc_wetland[n] / 100.));
 
-
-
                         G_locwetlextent[n] = locWetlAreaReductionFactor * cellArea * (G_loc_wetland[n] / 100.);
-                        // gwr below surface water bodies
-                        if ((1 == options.aridareaOpt) && (1 == G_aindex[n])) {
+                        // gwr below surface water bodies (except in arid inland sinks)
+                        if ((1 == options.aridareaOpt) && (1 == G_aindex[n]) && (G_LDD[n] >= 0)) {
                             gwr_locwet[n] = Kswbgw * locWetlAreaReductionFactor * G_loc_wetland[n] / 100. /
                                             (geo.G_contfreq[n] /
                                              100.); // gwr below local wetlands in mm/d with respect to continental area
@@ -2527,6 +2548,9 @@ void routingClass::routing(const short year, short day, short month, const short
                             G_locWetlStorage[n] = G_locWetlStoragePrevStep + totalInflow - PETgwr;
                         }
 
+                        if(abs(G_locWetlStorage[n])<=minStorVol)    //to counter numerical inaccuracies
+                            G_locWetlStorage[n]=0.;
+
                         if (G_locWetlStorage[n] > 0.) {
                             // Cell-specific calibration parameters - Use parameter  // FP
                             // loc_storageFactor (now: only one factor for surface water P_SWOUTF_C) in [1/d]
@@ -2539,10 +2563,6 @@ void routingClass::routing(const short year, short day, short month, const short
 
                         } else
                             outflow = 0.;
-
-                        // New approach in WG22b: In inland sinks, outflow from SWB flows into the river.
-                        // The computed transported volume /(= outflow of the river) represents the water resource of this cell and thus should not be zero (although
-                        // it cannot be assigned to a downstream cell). This value can be interpreted as either additional AET or river availability of the inland sink.
 
                         // substract outflow from storage
                         G_locWetlStorage[n] -= outflow;
@@ -2570,7 +2590,7 @@ void routingClass::routing(const short year, short day, short month, const short
                         if (2 == options.grid_store)
                             // sum up the negative fraction of the potential cell runoff which has not been realized
                             // due to reduction of potential evaporation
-                            G_monthlyPotCellRunoffDeficit[n][month]
+                            G_monthlyPotCellRunoffDeficit(n,month)
                                            += (0.0 - dailyWaterBalance.G_openWaterPET[n] * PETgwrRedFactor
                                                      * (1.0 - locWetlAreaReductionFactor)
                                                      * dailyWaterBalance.G_cellCorrFact[n]
@@ -2578,6 +2598,7 @@ void routingClass::routing(const short year, short day, short month, const short
                                                      * (G_loc_wetland[n] / 100.0));
 
                         inflow = outflow;
+                        outflowlocWetl = outflow;
 
                         // Area reduction factor is now calculated for the next day.
                         // Cell-specific calibration parameters - Apply multiplier
@@ -2599,11 +2620,8 @@ void routingClass::routing(const short year, short day, short month, const short
                     // water that comes out of the system of local lakes/wetlands
                     // is inflow into the river and is being routed through global lakes, reservoirs and global wetlands
 
-
                     inflow += G_riverInflow[n];
                     inflowUpstream = G_riverInflow[n];
-
-
 
                     // transport through global lakes
                     // input is defined as the inflow from the local wetlands in addition to the upstream flow
@@ -2611,7 +2629,6 @@ void routingClass::routing(const short year, short day, short month, const short
                     // new reservoir algorithm
                     if (G_lake_area[n] > 0.) //cell is a natural lake, or the reservoir type is unknown
                     {
-
                         //assign correct storage value which was calculated in the last timestep or maxStorage at model day one
                         G_gloLakeStoragePrevStep = G_gloLakeStorage[n];
 
@@ -2623,7 +2640,7 @@ void routingClass::routing(const short year, short day, short month, const short
 
                         // This factor was added to reduce PET as a function of actual lake storage (2.1f).
                         // Without reduction PET would lead to a continuous decline of lake level in some cases ((semi)arid regions)
-                        //HMS use reduction factor from previous time step (or the initial value)
+                        // HMS use reduction factor from previous time step (or the initial value)
                         gloLakeEvapoReductionFactor = G_gloLakeEvapoReductionFactor[n];
 
                         // G_dailyGloLakeEvapo[n]: see local lakes for explanation
@@ -2634,6 +2651,11 @@ void routingClass::routing(const short year, short day, short month, const short
                                        + (dailyWaterBalance.G_cellCorrFact[n]
                                           * dailyWaterBalance.G_openWaterPET[n] * gloLakeEvapoReductionFactor);
 
+                        if (G_dailyGloLakeEvapo[n] < 0.) { // avoid unphysical negative aet values
+                            G_dailyGloLakeEvapo[n] =0.;
+                        }
+
+
                         // reintroduced CFA in calculation (!no distinguishing for aridareaOpt!)
                         totalInflow = inflow + (dailyWaterBalance.G_openWaterPrec[n]
                                                 * ((double) G_lake_area[n] / 1000000.));
@@ -2641,8 +2663,8 @@ void routingClass::routing(const short year, short day, short month, const short
                         G_GloLakePrecip[n] = dailyWaterBalance.G_openWaterPrec[n] * ((double) G_lake_area[n]) /
                                              1000000.; // km3
 
-                        // gwr below surface water bodies
-                        if ((1 == options.aridareaOpt) && (1 == G_aindex[n])) {
+                        // gwr below surface water bodies (except in arid inland sinks)
+                        if ((1 == options.aridareaOpt) && (1 == G_aindex[n]) && (G_LDD[n] >= 0)) {
 
                             gwr_glolak[n] = Kswbgw * gloLakeEvapoReductionFactor * ((double) G_lake_area[n] /
                                                                                     (cellArea * (geo.G_contfreq[n] /
@@ -2676,8 +2698,8 @@ void routingClass::routing(const short year, short day, short month, const short
                         // until St = -Smax (outflow = 0 if storage <= 0).
                         PETgwrRemUseMax = totalInflow + maxStorage + G_gloLakeStoragePrevStep;
 
-                        if (PETgwrRemUse >
-                            PETgwrRemUseMax) {    // if (PETgwrRemUse >= PETgwrRemUseMax): PETgwrRemUse could be zero -> division through zero.
+                        if (PETgwrRemUse > PETgwrRemUseMax) {
+                            // PETgwrRemUse could be zero -> division through zero.
 
                             G_gloLakeStorage[n] = (-1.) * maxStorage;
                             outflow = 0.;
@@ -2695,8 +2717,7 @@ void routingClass::routing(const short year, short day, short month, const short
 
 
                         }
-                            // endif (PETgwrRemUse > PETgwrRemUseMax)
-                        else {    //if (PETgwrRemUse <= PETgwrRemUseMax):
+                        else {    // PETgwrRemUse <= PETgwrRemUseMax
 
                             // This ODE (ordinary differential equation) applies for S >= 0 only:
                             // dS/dt = totalInflow - PET - gwr - NAs - k*S
@@ -2726,17 +2747,15 @@ void routingClass::routing(const short year, short day, short month, const short
 
                                 // Storage equation without outflow:
                                 G_gloLakeStorage[n] = G_gloLakeStoragePrevStep + totalInflow - PETgwrRemUse;
-
-
                             }
-                            // endif (outflow < 0.)
 
                             remainingUseGloLake = 0.;
                             // Reduction of gwr_glolak[n] and evaporation not required in this case.
 
-
                         }
-                        // endelse (PETgwrRemUse <= PETgwrRemUseMax)
+
+                        if(abs(G_gloLakeStorage[n])<=minStorVol)    //to counter numerical inaccuracies
+                            G_gloLakeStorage[n]=0.;
 
                         // If (PETgwrRemUse > PETgwrRemUseMax), PET is reduced by PETgwrRemUseRedFactor.
                         // If a reduction is not required, PETgwrRemUseRedFactor is set to 1.
@@ -2745,18 +2764,16 @@ void routingClass::routing(const short year, short day, short month, const short
                         } else {
                             PETgwrRemUseRedFactor = PETgwrRemUseMax / PETgwrRemUse;
                         }
-                        // endelse
 
                         if (PETgwrRemUseMax > PETgwrRemUse) {    // -> reduction of PET not required
                             PETgwrRemUseRedFactor = 1.;
                         }
-                        // endif
 
 
                         if (2 == options.grid_store) {
                             // sum up the negative fraction of the potential cell runoff which has not been realized
                             // due to reduction of potential evaporation
-                            G_monthlyPotCellRunoffDeficit[n][month]
+                            G_monthlyPotCellRunoffDeficit(n,month)
                                            += (0.0 -
                                                (dailyWaterBalance.G_openWaterPET[n] * PETgwrRemUseRedFactor
                                                 * (1.0 - gloLakeEvapoReductionFactor)
@@ -2766,85 +2783,9 @@ void routingClass::routing(const short year, short day, short month, const short
                         }
 
                         inflow = outflow;
+                        outflowGloLake = outflow;
 
-                        // introduced for 22b, Option 28 "aggrNUsGloLakResOpt"
                         dailyActualUse = remainingUseGloLakeStart - remainingUseGloLake;
-
-                        // 'remainingUseGloLake' is redistributed over the riparian cells (and the outflow cell if the
-                        // initial 'dailydailyNUs' was larger than zero) (see documentation WG22b)
-                        // If a reservoir exists, 'remainingUseGloLake' is added to 'remainingUseRes', which is
-                        // redistributed over the riparian cells at the end of the reservoir loop.
-                        if (0 == G_reservoir_area[n]) {
-
-                            if (options.aggrNUsGloLakResOpt == 1) {
-
-                                G_remainingUse[n] = remainingUse;
-                                G_remainingUseGloLake[n] = remainingUseGloLake;
-                                G_remainingUseGloLakeRedistr[n] = remainingUseGloLake;
-                                G_totalDesiredUseCell[n] = totalDesiredUseCell;
-
-                                for (int i = 0; i < ng; i++) {
-
-                                    if (G_glwdUnit[n] == G_glwdUnit[i]) {
-
-                                        if (G_remainingUseGloLakeRedistr[n] > 0.) {
-
-                                            if (G_totalDesiredUseCell[n] <=
-                                                0.) {        // different computation of G_unsatUseRiparian[i], if G_totalDesiredUseCell[n] of the OUTFLOW CELL is negative - see WG22b documentation
-
-                                                // (G_dailydailyNUsAggregated[n] - G_dailydailyNUs[n]) always larger than zero in this loop
-
-                                                if (G_dailydailyNUs[i] <= 0.)
-                                                    G_unsatUseRiparian[i] = 0.;
-
-                                                else
-                                                    G_unsatUseRiparian[i] = (G_dailydailyNUs[i] /
-                                                                             (G_dailydailyNUsAggregated[n] -
-                                                                              G_dailydailyNUs[n])) *
-                                                                            G_remainingUseGloLakeRedistr[n];
-                                                // G_unsatUseRiparian is also computed for the outflow cell (when i == n), but it is only used for riparian cells, not for outflow cells.
-
-                                                G_remainingUseGloLake[n] = 0.;
-                                                G_unsatUseRiparian[n] = 0.;
-
-                                            } else {    // G_totalDesiredUseCell[n] in outflow cell > 0 (G_totalDesiredUseCell[n] includes G_dailydailyNUs and (depending on selected options) allocated use from nbc and totalUnsatisfiedUse[n] (from previous day)
-
-                                                //	At this point, G_remainingUse[n] is always > 0. (within loop "G_remainingUseGloLakeRedistr[n] > 0.")
-                                                G_unsatUseRiparian[i] = G_dailydailyNUs[i] / G_remainingUse[n] *
-                                                                        G_remainingUseGloLakeRedistr[n];
-
-                                                if (G_dailydailyNUs[i] < 0.)
-                                                    G_unsatUseRiparian[i] = 0.;
-
-                                                G_remainingUseGloLake[n] *= (G_totalDesiredUseCell[n] /
-                                                                             G_remainingUse[n]);    // G_remainingUseGloLake[n] to be satisfied from river storage
-
-                                                G_unsatUseRiparian[n] = 0.;
-                                                // CR: Required since G_unsatUseRiparian[n] is added to 'remainingUse' at the beginning of each time step for all cells with GLWD units.
-                                            }
-
-                                        } else {    // if G_remainingUseGloLake[n] == 0.:
-                                            G_unsatUseRiparian[i] = 0.;
-                                            // required? -> already covered by G_unsatUseRiparian[i] = 0?
-                                            G_unsatUseRiparian[n] = 0.;
-                                            G_remainingUseGloLake[n] = 0.;
-                                        }
-
-                                    }    // end of loop over 'i' with matching GLWD unit
-                                }
-                                // end of loop over grid cells 'i'
-
-                                remainingUse = G_remainingUseGloLake[n];
-
-                            }   // end if (options.aggrNUsGloLakResOpt == 1)
-                            else { // Option 'aggrNUsGloLakResOpt' == 0 and no reservoir in this cell
-                                remainingUse = remainingUseGloLake;
-                            }
-                            // end else
-
-                        }  // end if (0 == G_reservoir_area[n])
-                        // if (G_reservoir_area[n] > 0.): 'remainingUseGloLake' is added to 'remainingUseRes' at the beginning of the reservoir loop
-
 
                         //Evaporation reduction factor is now calculated for the next day.
                         // Cell-specific calibration parameters - Apply multiplier  // FP
@@ -2861,12 +2802,6 @@ void routingClass::routing(const short year, short day, short month, const short
                             G_gloLakeEvapoReductionFactor[n] = 1.;
 
                     }
-                    //end  if (G_lake_area[n] > 0)
-
-
-                    // This variable should be defined when calculating total inflow to reservoirs.
-                    //res_inflow = inflow - G_riverInflow[n];
-
 
                     // transport through reservoir if (options.resOpt == 1)
                     if (G_reservoir_area[n] > 0.) { //cell is a reservoir cell with a well known type
@@ -2905,6 +2840,11 @@ void routingClass::routing(const short year, short day, short month, const short
                                        + (dailyWaterBalance.G_cellCorrFact[n]
                                           * (dailyWaterBalance.G_openWaterPET[n] * gloResEvapoReductionFactor));
 
+                        if (G_dailyResEvapo[n] < 0.) { // avoid unphysical negative aet values
+                            G_dailyResEvapo[n] =0.;
+                        }
+
+
                         //inflow from upstream PLUS lake water balance
                         // reintroduced CFA in calculation (!no distinguishing for aridareaOpt!)
                         totalInflow = inflow + (dailyWaterBalance.G_openWaterPrec[n]
@@ -2913,8 +2853,8 @@ void routingClass::routing(const short year, short day, short month, const short
                         G_ReservoirPrecip[n] = dailyWaterBalance.G_openWaterPrec[n] * ((double) G_reservoir_area[n]) /
                                                1000000.; // km3
 
-                        // gwr below surface water bodies
-                        if ((1 == options.aridareaOpt) && (1 == G_aindex[n])) {
+                        // gwr below surface water bodies (except in arid inland sinks)
+                        if ((1 == options.aridareaOpt) && (1 == G_aindex[n]) && (G_LDD[n] >= 0)) {
                             gwr_res[n] = Kswbgw * gloResEvapoReductionFactor * ((double) G_reservoir_area[n] /
                                                                                 (cellArea * (geo.G_contfreq[n] /
                                                                                              100.))); // gwr below reservoirs in mm/d per continental area
@@ -2958,6 +2898,27 @@ void routingClass::routing(const short year, short day, short month, const short
                         }
 
                         // Treatment of NAs (net abstraction of surface water): add or substract from available storage
+                        // ---
+                        // Rationale behind net abstraction satisfaction, documented by Tim Trautmann Jan. 2022
+                        // ---
+                        // There are three processes to redistribute net abstraction from surface water bodies spatially
+                        // and temporally a) aggregation of positive NAs over GLWD units, b) allocation of use to
+                        // neigbhouring cell and c) delayed satisfaction.
+                        // a) (options.aggrNUsGloLakResOpt): the water balance of global lakes, regulated lakes and
+                        //   reservoirs are calculated in the outflow cell. Thus positive NAs is aggregated over
+                        //   riparian cells of a global lake and is tried to be satisfied in outflow cell with global
+                        //   lake and or reservoir storage. If not possible the part of this unsatisfied aggregated
+                        //   NAs is reassign to originating riparian cell. This reassigning happens after the reservoir
+                        //   resp. global lake storage. This share of NAs is tried to be satisfied first.
+                        // b) (options.use_alloc): if a cell n cannot satisfy its own desired NAs it is tried to assign
+                        //   this remaining use to the neighbouring cell (secondCell) if possible. If it cannot be
+                        //   satisfied also in secondCell it is reassign to cell n in next time step. This reassigned
+                        //   unsatisfied may be piled up with delayed satisfaction. The remaining use of a cell n is
+                        //   satisfied first before the allocated use of another cell is satisfied.
+                        // c) (options.delayedUseSatisfaction): the unsatisfied use of cell n can be used to be
+                        //   satisfied for up to one year respecting the upper redistribution mechanism.
+                        // The return flows into groundwater are adapted on daily basis by calculating a daily change
+                        // of remaining use of cell n. For more details see updateNetAbstractionGW.
                         if (options.subtract_use > 0) {
 
                             // Negative values of NAs (return flow to surface water) are added (signs "- plus - equals +") to the storage:
@@ -2981,14 +2942,11 @@ void routingClass::routing(const short year, short day, short month, const short
                                     }
 
                                 }
-                                // endif (gloResStorage > 10% stor_cap)
-                                // else (gloResStorage <= 10% stor_cap): no abstraction allowed
                             }
-                            // endelse remainingUseRes >=0.
-
                         }
-                        // endif (options.subtract_use > 0)
 
+                        if(abs(G_gloResStorage[n])<=minStorVol) //to counter numerical inaccuracies
+                            G_gloResStorage[n]=0.;
 
                         // Different from local lakes and local wetlands, the outflow (release) of reservoirs is
                         // computed based on S(t) and not S(t-1).
@@ -2997,7 +2955,6 @@ void routingClass::routing(const short year, short day, short month, const short
                         // set rules at the beginning of the operational year! (only once!)
                         if (month == G_start_month[n] - 1) {
                             if (day == first_day_in_month[month]) {
-                                // if (st == 1) {	// st always 1; not required anymore
                                     //1. calculate release coefficient for the actual year:
                                     //reduce release coefficent in this year to refill storage volume in reservoir
                                     if (G_gloResStorage[n] < (G_stor_cap[n] * 0.1))
@@ -3007,12 +2964,12 @@ void routingClass::routing(const short year, short day, short month, const short
 
                                 //2 calculate annual release
                                 annual_release[n] = K_release[n] * G_mean_outflow[n];
-                                //} // st always 1; not required anymore
                             }
                         }
 
-                        if ((G_res_type[n] + 0) == 1) {// (irrigation reservoir)
-                            // calculate monthly demand of downstream area
+                        if ((G_res_type[n] + 0) == 1) {
+                            // (irrigation reservoir)
+                            //calculate monthly demand of downstream area
                             dailyUse = 0.0;
 
                             // read in net surface water use
@@ -3022,7 +2979,7 @@ void routingClass::routing(const short year, short day, short month, const short
                             int downstreamCell = G_downstreamCell[n];
                             // max reservoir_dsc cells downstream or to the basin outlet or area up to next reservoir
                             while (i < reservoir_dsc && downstreamCell > 0 && G_reservoir_area[downstreamCell] <= 0) {
-                                dailyUse += G_dailydailyNUs[downstreamCell - 1] * G_alloc_coeff[n][i++];
+                                dailyUse += G_dailydailyNUs[downstreamCell - 1] * G_alloc_coeff(n,i++);
 
                                 // next downstream cell
                                 downstreamCell = G_downstreamCell[downstreamCell - 1];
@@ -3047,7 +3004,6 @@ void routingClass::routing(const short year, short day, short month, const short
                             release = K_release[n] * prov_rel;
                         } else { //monthly_release = (c_ratio/0,5)^2 * provisional monthly release + (1-(c_ratio/0,5)^2) * monthly_inflow (just daily inflow?)
                             release = ((4. * c_ratio * c_ratio) * K_release[n] * prov_rel)
-                                      //+ ((1.0 - ((4.*c_ratio*c_ratio))) * inflow * 1000000000./(2.*3600.));
                                       + ((1.0 - ((4. * c_ratio * c_ratio))) * inflow * 1000000000. / (24. * 3600.));
                         }
 
@@ -3060,8 +3016,8 @@ void routingClass::routing(const short year, short day, short month, const short
                         else
                             outflow = 0.1 * release * (24. * 3600.) / 1000000000.;
 
-                        if (outflow <
-                            0.) // to prevent that outflow (= river availability) gets negative in rare cases when net uses are negative downstream of a irrigation reservoir
+                        // to prevent that outflow (= river availability) gets negative in rare cases when net uses are negative downstream of a irrigation reservoir
+                        if (outflow < 0.)
                             outflow = 0.;
 
                         // substract outflow from storage
@@ -3081,7 +3037,6 @@ void routingClass::routing(const short year, short day, short month, const short
                         }
 
                         //daily outflow from reservoirs
-                        //G_daily_res_out = (outflow * 1000000000.); // [m3]
                         G_daily_res_out[n] = outflow; // [km3/day]
 
                         // If (PETgwr > PETgwrMax), PET is reduced by PETgwrRedFactor.
@@ -3099,7 +3054,7 @@ void routingClass::routing(const short year, short day, short month, const short
                         if (2 == options.grid_store)
                             // sum up the negative fraction of the potential cell runoff which has not been realized
                             // due to reduction of potential evaporation
-                            G_monthlyPotCellRunoffDeficit[n][month]
+                            G_monthlyPotCellRunoffDeficit(n,month)
                                            += (0.0 - (dailyWaterBalance.G_openWaterPET[n] * PETgwrRemUseRedFactor // ???
                                                       * (1.0 - gloResEvapoReductionFactor)
                                                       * dailyWaterBalance.G_cellCorrFact[n]
@@ -3107,91 +3062,10 @@ void routingClass::routing(const short year, short day, short month, const short
                                                       / 1000000.0));
 
                         // reintroduced CFA
-
                         inflow = outflow; // outflow of reservoir is inflow to global wetlands
-
-                        //Redistribute remainingUseRes over all riparian cells
-
-#ifdef _WATERGAP_CHECKS_GLOBAL_H
-                                                                                                                                                // Check Felix Portmann 2015 - for invalid data
-                        if ( (year >= chk_year) && (month >= chk_month) && (day_in_month >= chk_day_in_month) ) {
-                            check_value_double_LT0(inflow);
-                            check_value_double_LT0(outflow);
-                        }
-#endif
-
 
                         // introduced for 22b, Option 28 "aggrNUsGloLakResOpt"
                         dailyActualUse += remainingUseResStart - remainingUseRes;
-
-                        // remainingUseRes is redistributed over the riparian cells (and the outflow cell if the initial
-                        // dailydailyNUs was larger than zero):
-                        if (options.aggrNUsGloLakResOpt == 1) {
-
-                            G_remainingUse[n] = remainingUse;
-                            G_remainingUseRes[n] = remainingUseRes;
-                            G_remainingUseResRedistr[n] = remainingUseRes;
-                            G_totalDesiredUseCell[n] = totalDesiredUseCell;
-
-                            for (int i = 0; i < ng; i++) {
-
-                                if (G_glwdUnit[n] == G_glwdUnit[i]) {
-
-                                    if (G_remainingUseResRedistr[n] > 0.) {
-
-                                        if (G_totalDesiredUseCell[n] <=
-                                            0.) {        // different computation of G_unsatUseRiparian[i], if G_totalDesiredUseCell[n] of the OUTFLOW CELL is negative - see WG22b documentation
-
-                                            if (G_dailydailyNUs[i] <= 0.) {
-
-                                                G_unsatUseRiparian[i] = 0.;
-
-                                            } else {
-
-                                                G_unsatUseRiparian[i] = (G_dailydailyNUs[i] /
-                                                                         (G_dailydailyNUsAggregated[n] -
-                                                                          G_dailydailyNUs[n])) *
-                                                                        G_remainingUseResRedistr[n]; // (G_remainingUse[n] - G_dailydailyNUs[n]) always larger than zero in this loop
-                                                // G_unsatUseRiparian is also computed for outflow cells (when i == n), but it is not used in the code for outflow cells.
-                                                G_remainingUseRes[n] = 0.;
-                                                G_unsatUseRiparian[n] = 0.;
-                                            }
-
-                                        } else {    // G_totalDesiredUseCell[n] in outflow cell > 0 (G_totalDesiredUseCell[n] includes G_dailydailyNUs and (depending on selected options) allocated use from nbc and totalUnsatisfiedUse[n] (from previous day)
-
-                                            G_unsatUseRiparian[i] = G_dailydailyNUs[i] / G_remainingUse[n] *
-                                                                    G_remainingUseResRedistr[n]; // G_AllocatedUse OR G_totalUnsatisfiedUse are also distributed over riparian cells.
-
-                                            if (G_dailydailyNUs[i] < 0.)
-                                                G_unsatUseRiparian[i] = 0.;
-
-                                            G_remainingUseRes[n] *= (G_totalDesiredUseCell[n] /
-                                                                     G_remainingUse[n]);    // remainingUse to be satisfied from river storage
-
-                                            G_unsatUseRiparian[n] = 0.;        // CR: Required since G_unsatUseRiparian[n] is added to 'remainingUse' at the beginning of each time step for all cells with GLWD units.
-
-                                        }
-                                        //  end if (G_remainingUseResRedistr[n] > 0.)
-                                    } else {
-                                        G_unsatUseRiparian[i] = 0.;
-                                        // required? -> already covered by G_unsatUseRiparian[i] = 0?
-                                        G_unsatUseRiparian[n] = 0.;
-                                        G_remainingUseRes[n] = 0.;
-                                    }
-                                    // end if (G_remainingUseResRedistr[n] == 0.)
-
-                                }
-                                // end of loop over 'i' with matching GLWD unit
-
-                            }
-                            // end of loop over 'i'
-
-                            remainingUse = G_remainingUseRes[n];
-
-                            // end if (options.aggrNUsGloLakResOpt == 1)
-                        } else {
-                            remainingUse = remainingUseRes;
-                        }
 
                         //Evaporation reduction factor is now calculated for the next day.
                         G_gloResEvapoReductionFactor[n] = 1. - pow(fabs(G_gloResStorage[n] - maxStorage)
@@ -3203,11 +3077,99 @@ void routingClass::routing(const short year, short day, short month, const short
                         if (G_gloResEvapoReductionFactor[n] > 1.)  // (could occur due to numerical inaccuracies)
                             G_gloResEvapoReductionFactor[n] = 1.;
 
+                        additionalOutIn.additionalOutputInput(n, 5) = K_release[n]; // AEMS: save K_release
+
                     }
-                    // end if (G_reservoir_area[n] > 0)
-                    // reservoir algorithm end
+                    if (options.aggrNUsGloLakResOpt == 1 && (G_reservoir_area[n] > 0. || G_lake_area[n] > 0.)) {
+                        double remainingUseAfterGloLakandRes = 0.; // is remainingUse (all allocated, unsatisfied etc. remaining use) after treating reservoirs and global lakes and regulated lakes
+                        double rUseAllocUnsat = (totalDesiredUse - G_dailydailyNUsAggregated[n]); // variable needed to distinguish GLWD aggregated remaining Use and other remaining Use, (totalDesiredUse - G_dailydailyNUsAggregated[n]) = unsatisfied + allocated + unsatalloc + unsatUseRiparian use, which can only positive or zero
+                        unsatGLWDUseOfRiparians = 0.;
 
+                        if (G_reservoir_area[n] > 0.) {
+                            remainingUseAfterGloLakandRes = remainingUseRes; // is correct if solely res in cell or both glo lak and res
+                        } else if (G_lake_area[n] > 0.){
+                            remainingUseAfterGloLakandRes = remainingUseGloLake; // only if solely glo lak in cell
+                        }
 
+                        for (int i = 0; i < ng; i++) {
+
+                            if (G_glwdUnit[n] == G_glwdUnit[i]) {
+
+                                if ((remainingUseAfterGloLakandRes - rUseAllocUnsat )> 0.) { // is the case if remainingUse of NAs aggregated is left
+
+                                    if (G_dailydailyNUs[n] <= 0.) { // different calculation if own NAs is negative see documentation of 22b
+                                        if (n == i ){ // i == n we are calculating the outflow cell
+                                            if (G_dailydailyNUsAggregated[n] < 0) // shouldn't be reached as remainingUseAfterGloLakandRes - rUseAllocUnsat > 0.
+                                                remainingUse = remainingUseAfterGloLakandRes;
+                                            else
+                                                remainingUse = rUseAllocUnsat;
+
+                                            G_unsatUseRiparian[n] = 0.;
+                                        } else { // riparian cell
+                                        if (G_dailydailyNUs[i] <= 0.) {
+
+                                            G_unsatUseRiparian[i] = 0.;
+
+                                        } else {
+
+                                            G_unsatUseRiparian[i] = (G_dailydailyNUs[i] /
+                                                                     (G_dailydailyNUsAggregated[n] -
+                                                                      G_dailydailyNUs[n])) *
+                                                                    (remainingUseAfterGloLakandRes - rUseAllocUnsat); // (G_remainingUse[n] - G_dailydailyNUs[n]) always larger than zero in this loop
+                                        }
+                                        }
+                                        //AEMS:
+                                        if (day == last_day_in_month + 1) {
+                                            additionalOutIn.additionalOutputInput(n, 42) = G_unsatUseRiparian[n];
+                                            additionalOutIn.additionalOutputInput(i, 42) = G_unsatUseRiparian[i];
+                                        }
+
+                                    } else {  // if daily NAs of outflow cell is positive
+                                        if (n == i) { // i == outflow cell (n)
+                                            remainingUse = ( G_dailydailyNUs[n] / G_dailydailyNUsAggregated[n]) * (remainingUseAfterGloLakandRes - rUseAllocUnsat) + rUseAllocUnsat;
+                                            G_unsatUseRiparian[n] = 0.;
+                                        } else { // i == riparian cell
+                                            if (G_dailydailyNUs[i] < 0.)
+                                                G_unsatUseRiparian[i] = 0.;
+                                            else
+                                                G_unsatUseRiparian[i] =
+                                                               G_dailydailyNUs[i] / G_dailydailyNUsAggregated[n] *
+                                                               (remainingUseAfterGloLakandRes -
+                                                                        rUseAllocUnsat);
+                                        }
+                                        //AEMS
+                                        if (day == last_day_in_month + 1) {
+                                            additionalOutIn.additionalOutputInput(n, 42) = G_unsatUseRiparian[n];
+                                            additionalOutIn.additionalOutputInput(i, 42) = G_unsatUseRiparian[i];
+                                        }
+                                    }
+                                } else {
+                                    G_unsatUseRiparian[i] = 0.;
+                                    G_unsatUseRiparian[n] = 0.;
+                                    remainingUse = remainingUseAfterGloLakandRes;
+                                    //AEMS
+                                    if (day == last_day_in_month + 1) {
+                                        additionalOutIn.additionalOutputInput(i, 42) = G_unsatUseRiparian[i];
+                                        additionalOutIn.additionalOutputInput(n, 42) = G_unsatUseRiparian[n];   //before n,48 but 48 never read in
+                                    }
+                                }
+                                if ((n != i) && (G_dailydailyNUs[i] > 0)){
+                                    G_monthlyRedistributeGLWDUse(i,month) += (G_dailydailyNUs[i] -
+                                                   G_unsatUseRiparian[i]);
+
+                                    G_monthlyRedistributeGLWDUse(n,month) -= (G_dailydailyNUs[i] -
+                                                   G_unsatUseRiparian[i]);
+                                }
+                            }
+                        }
+                        unsatGLWDUseOfRiparians = remainingUseAfterGloLakandRes - remainingUse;
+                    } else if (options.aggrNUsGloLakResOpt == 0 && (G_reservoir_area[n] > 0. || G_lake_area[n] > 0.)) {
+                        if (G_reservoir_area[n] > 0.) {
+                            remainingUse = remainingUseRes; // is correct if solely res in cell or both glo lak and res
+                        } else if (G_lake_area[n] > 0.){
+                            remainingUse = remainingUseGloLake; // only if solely glo lak in cell
+                        }
+                    }
 
                     // outflow of a global lake is inflow to global wetlands
 
@@ -3235,21 +3197,19 @@ void routingClass::routing(const short year, short day, short month, const short
                                        + (dailyWaterBalance.G_cellCorrFact[n]
                                           * (dailyWaterBalance.G_openWaterPET[n] * gloWetlAreaReductionFactor));
 
+                        if (G_dailyGloWetlEvapo[n] < 0.) { // avoid unphysical negative aet values
+                            G_dailyGloWetlEvapo[n] =0.;
+                        }
+
+
 
                         // calculate inflow only in dependence of reduction factor to avoid inconsistent counting of precipitation
-                        //   if (options.aridareaOpt == 1) // same handling of CFA like in local lakes, no further comments here
                         totalInflow = inflow + (dailyWaterBalance.G_openWaterPrec[n] * gloWetlAreaReductionFactor
                                                 * (cellArea / 1000000.) * (G_glo_wetland[n] / 100.));    //[mm]->[km3]
 
-                        //					else // no gwr_swb means no reduction-factor based variation of land area fraction
-                        //						totalInflow = inflow + ((double)dailyWaterBalance.G_openWaterPrec[n]
-                        //												* (double)dailyWaterBalance.G_cellCorrFact[n]//[mm]->[km3]
-                        //                                                * (cellArea / 1000000.) * ((double) G_glo_wetland[n] / 100.));
-
-
                         G_glowetlextent[n] = gloWetlAreaReductionFactor * cellArea * (G_glo_wetland[n] / 100.);
-                        // HMS 2013-11-22 gwr below surface water bodies
-                        if ((1 == options.aridareaOpt) && (1 == G_aindex[n])) {
+                        // gwr below surface water bodies (except in arid inland sinks)
+                        if ((1 == options.aridareaOpt) && (1 == G_aindex[n]) && (G_LDD[n] >= 0)) {
                             gwr_glowet[n] = Kswbgw * gloWetlAreaReductionFactor * G_glo_wetland[n] / 100. /
                                             (geo.G_contfreq[n] / 100.); // gwr below global wetlands in mm/d
 
@@ -3259,10 +3219,6 @@ void routingClass::routing(const short year, short day, short month, const short
                         PETgwr = G_dailyGloWetlEvapo[n] * (cellArea / 1000000.) *
                                  ((G_glo_wetland[n]) / 100.)                        //[mm]->[km3]
                                  + gwr_glowet[n] * cellArea * (geo.G_contfreq[n] / 100.) / 1000000.;    //[mm -> km3]
-
-                        // New approach in WG22b: In inland sinks, outflow from SWB flows into the river.
-                        // The computed transported volume (= outflow of the river) represents the water resource of this cell and thus should not be zero (although
-                        // it cannot be assigned to a downstream cell). This value can be interpreted as either additional AET or river availability of the inland sink.
 
                         // There are two options to compute PETgwrMax: Based on the analytical solution of 1) dS/dt=In-Out-k*S; 2) dS/dt=In-Out
                         // In the first equation, the outflow is appr. 0.6% of S(t-1), although the storage is empty at the end of the timestep.
@@ -3284,32 +3240,19 @@ void routingClass::routing(const short year, short day, short month, const short
                             // Cell-specific calibration parameters - Use parameter
                             // glo_storageFactor (now: only one factor for surface water P_SWOUTF_C) in [1/d]
                             G_gloWetlStorage[n] = G_gloWetlStoragePrevStep * exp(-1. * P_SWOUTF_C__at__n)
-                                                  + (1. / P_SWOUTF_C__at__n) * (totalInflow - PETgwr)
-                                                    * (1. - exp(-1. * P_SWOUTF_C__at__n));
+                                           + (1. / P_SWOUTF_C__at__n) * (totalInflow - PETgwr)
+                                           * (1. - exp(-1. * P_SWOUTF_C__at__n));
 
                             outflow = totalInflow + G_gloWetlStoragePrevStep - G_gloWetlStorage[n] - PETgwr;
                         }
-
-#ifdef _WATERGAP_CHECKS_GLOBAL_H
-                                                                                                                                                // Check Felix Portmann 2015 - for invalid data
-                            if ( (year >= chk_year) && (month >= chk_month) && (day_in_month >= chk_day_in_month) ) {
-                                check_value_double_LT0(inflow);
-								check_value_double_LT0(P_SWOUTF_C__at__n);
-                                check_value_double_LT0(totalInflow);
-                                check_value_double_LT0(G_gloWetlStoragePrevStep);
-                                check_value_double_LT0(G_gloWetlStorage[n]);
-                                check_value_double_LT0(PETgwr);
-                                check_value_double_LT0(outflow);
-
-                                check_value_double_LT0(maxStorage);
-                            }
-#endif
 
                         if (G_gloWetlStorage[n] > maxStorage) {
                             outflow += (G_gloWetlStorage[n] - maxStorage);
                             G_gloWetlStorage[n] = maxStorage;
                         }
 
+                        if(abs(G_gloWetlStorage[n])<=minStorVol)    //to counter numerical inaccuracies
+                            G_gloWetlStorage[n]=0.;
 
                         // If (PETgwr > PETgwrMax), PET is reduced by PETgwrRedFactor. If a reduction is not required,
                         // PETgwrRedFactor is set to 1.
@@ -3327,7 +3270,7 @@ void routingClass::routing(const short year, short day, short month, const short
                         if (2 == options.grid_store)
                             // sum up the negative fraction of the potential cell runoff which has not been realized
                             // due to reduction of potential evaporation
-                            G_monthlyPotCellRunoffDeficit[n][month]
+                            G_monthlyPotCellRunoffDeficit(n,month)
                                            += (0.0 - dailyWaterBalance.G_openWaterPET[n] * PETgwrRedFactor
                                                      * (1.0 - gloWetlAreaReductionFactor)
                                                      * dailyWaterBalance.G_cellCorrFact[n]
@@ -3336,6 +3279,7 @@ void routingClass::routing(const short year, short day, short month, const short
 
 
                         inflow = outflow;
+                        outflowGloWetland = outflow;
 
                         // Area reduction factor is now calculated for the next day.
                         // Cell-specific calibration parameters - Apply multiplier  // FP
@@ -3358,11 +3302,12 @@ void routingClass::routing(const short year, short day, short month, const short
                     // GW storage is computed before local lakes in humid cells (baseflow directed into local lake)
                     // and before the river in (semi-)arid cells (baseflow directed into river)
 
-                    if ((1 == options.aridareaOpt) && (1 == G_aindex[n])) {        // (semi-)arid cells
+                    if ((1 == options.aridareaOpt) && (1 == G_aindex[n]) && (G_LDD[n] >= 0)) {        // (semi-)arid cells; fractionalRoutingOpt automatically set to 1, if aridareaOpt==1
 
                         // sum up total groundwater recharge [mm/d] from surface water bodies and calculate fraction
                         // of actual surface waterbody area
                         // gwr_swb is added to the groundwater storage in the next timestep
+
                         G_gwr_swb[n] = gwr_loclak[n] + gwr_glolak[n] + gwr_locwet[n] + gwr_glowet[n] +
                                        gwr_res[n]; // sum up gwr but do not use gwr_rivers because rivers are the final storage [mm/d]
                         G_groundwaterStoragePrevStep = G_groundwaterStorage[n];
@@ -3378,8 +3323,8 @@ void routingClass::routing(const short year, short day, short month, const short
 
                         // G_dailydailyNUg is adapted in this timestep based on the remaining use of last time step
                         if (options.subtract_use > 0) {
-                            if (G_dailyRemainingUse[n] != 0) {
-                                G_dailydailyNUg[n] = updateNetAbstractionGW(n, month);
+                            if (G_dailyRemainingUse[n] != 0.) {
+                                G_dailydailyNUg[n] = updateNetAbstractionGW(n);
                             }
                             netGWin -= G_dailydailyNUg[n];
                         }
@@ -3392,47 +3337,37 @@ void routingClass::routing(const short year, short day, short month, const short
                                                   (1. / P_GWOUTF_C__at__n_routing) * netGWin *
                                                   (1. - exp(-1. * P_GWOUTF_C__at__n_routing));
 
+                        if(abs(G_groundwaterStorage[n])<=minStorVol)    //to counter numerical inaccuracies
+                            G_groundwaterStorage[n]=0.;
+
+
                         groundwater_runoff_km3 = G_groundwaterStoragePrevStep - G_groundwaterStorage[n] + netGWin;
 
-                        if (groundwater_runoff_km3 <=
-                            0.) {    // different differential equation (ODE) applies:
-                                     // dS/dt = GWR - NAg (without k*S) -> S(t) = S(t-1) + netGWin
+
+
+                        if (groundwater_runoff_km3 <= 0.) {
+                            // different differential equation (ODE) applies:
+                            // dS/dt = GWR - NAg (without k*S) -> S(t) = S(t-1) + netGWin
 
                             groundwater_runoff_km3 = 0.;
 
                             G_groundwaterStorage[n] = G_groundwaterStoragePrevStep + netGWin;
+
+                            if(abs(G_groundwaterStorage[n])<=minStorVol)    //to counter numerical inaccuracies
+                                G_groundwaterStorage[n]=0.;
+
                         }
                         if ((2 == options.grid_store) || (4 == options.grid_store) || (6 == options.grid_store))
-                            G_monthlyGwRunoff[n][month] += groundwater_runoff_km3;
+                            G_monthlyGwRunoff(n, month) += groundwater_runoff_km3;
                         // if daily 365 output and gwout (same for 31; same for land area fraction)
-                        // G_daily365GwRunoff[n][day - 1] = groundwater_runoff_km3;
+                        // G_daily365GwRunoff(n,day - 1) = groundwater_runoff_km3;
 
-                        if (1 ==
-                            options.fractionalRoutingOpt) { // only a fraction (depending on initial amount of surface water bodies) of surface and groundwater runoff should go to the local lakes later, rest should go directly to the river
-                            G_fswb_catchment[n] = G_fswbInit[n] *
-                                                  20.;                  // G_fswb_catchment[n] = G_fswb[n] * 5.; // add a catchment area to surface water bodies (specified as x times the size of swb)...
-                            if (G_fswb_catchment[n] > 1.) // ... and prevent that G_fswb is greater then 1
-                                G_fswb_catchment[n] = 1.;
-                            if (G_aindex[n] ==
-                                1) {// in semi-arid/arid areas, all groundwater reaches the river directly
-                                G_localGWRunoffIntoRiver[n] = groundwater_runoff_km3;
-                            } else {// in humid areas, groundwater is also routed through surface water bodies
-                                G_localGWRunoffIntoRiver[n] = (1. - G_fswb_catchment[n]) * groundwater_runoff_km3;
-                            }
+                        // in semi-arid/arid areas, all groundwater reaches the river directly
+                        G_localGWRunoffIntoRiver[n] = groundwater_runoff_km3;
 
-                            if (G_aindex[n] ==
-                                0) // route groundwater only through surface water bodies in humid regions
-                                G_localGWRunoff[n] = G_fswb_catchment[n] * groundwater_runoff_km3;
+                        // Firstly, amount of local runoff flowing directly into the river is calculated, then local gw runoff is added for the rest term.
 
-                            else
-                                G_localGWRunoff[n] = 0.; // in arid regions, all groundwater flows directly to the river
-
-                            // Firstly, amount of local runoff flowing directly into the river is calculated, then local gw runoff is added for the rest term.
-
-                        }
-
-                        // to be changed for fractionalrouting option (normal routing without G_localRunffIntoRiver and
-                        // G_localRGWRunoffIntoRiver
+                        // G_localRunoff[n] and G_localRunoffIntoRiver[n] in arid cells calculated before local lakes.
                         // reintroduced for CFA calculation
                         potCellRunoff = (G_localRunoff[n] + G_localRunoffIntoRiver[n] +
                                          G_localGWRunoffIntoRiver[n]    // is in km3
@@ -3445,13 +3380,11 @@ void routingClass::routing(const short year, short day, short month, const short
                         G_potCellRunoff[n] += potCellRunoff;
 
                         if (2 == options.grid_store) {
-                            G_monthlyPotCellRunoff[n][month] += potCellRunoff;
+                            G_monthlyPotCellRunoff(n, month) += potCellRunoff;
                         }
 
                     }
                     // end of computation of GW storage and baseflow for options.aridareaOpt == 1 && (semi-)arid cells
-
-
 
                     // calculate the amount of water which flows out of local/global lakes/wetlands
                     // and contributes to the actual cell runoff within the cell
@@ -3473,14 +3406,12 @@ void routingClass::routing(const short year, short day, short month, const short
                     // At this point G_riverInflow is the total inflow to the river system:
                     // runoff->loca_lakes->local_wetlands->global_lakes->global_wetlands->river_network
 
-                    if (1 ==
-                        options.fractionalRoutingOpt) { // if option is activated, add the water which is flowing directly to the river
+                    if ((1 ==
+                        options.fractionalRoutingOpt) && (G_LDD[n] >= 0)) { // if option is activated, add the water which is flowing directly to the river
                         G_riverInflow[n] += G_localRunoffIntoRiver[n];
                         G_riverInflow[n] += G_localGWRunoffIntoRiver[n];
                     }
-                    if ((0 == options.fractionalRoutingOpt) && (G_aindex[n] == 1) && (options.aridareaOpt == 1)) {
-                        G_riverInflow[n] += G_localGWRunoffIntoRiver[n];
-                    }
+
                     // riverVelocity in [km/d]
 
                     if (options.riverveloOpt == 0) {
@@ -3489,23 +3420,20 @@ void routingClass::routing(const short year, short day, short month, const short
                     else if (options.riverveloOpt == 1) {
                         // Cell-specific calibration parameters - Apply multiplier M_RIVRGH_C within method getRiverVelocity // FP
                         riverVelocity = getRiverVelocity(G_RiverSlope[n], G_riverBottomWidth[n], G_Roughness[n],
-                                                         G_riverInflow[n], n);
+                                                         G_riverInflow[n], n, calParam);// OE: added calParam
                     }
                     else if (options.riverveloOpt == 2) {
                         riverVelocity = getNewRiverVelocity(G_RiverSlope[n], G_riverBottomWidth[n], G_Roughness[n],
-                                                            G_riverStorage[n], G_riverLength[n], n);
+                                                            G_riverStorage[n], G_riverLength[n], n, calParam);// OE: added calParam
                     }
 
                     // WG22b: To be consistent with global lakes/wetlands/groundwater (storages with ord. diff.
                     // equation), K is expressed in 1/d.
                     K = riverVelocity / G_riverLength[n]; // [(km/d)/km] = [1/d]
-                    // K = G_riverLength[n] / riverVelocity; // [km / (km/d)] = [d]
-                    // K = G_celldistance[geo.G_row[n] - 1][2] / riverVelocity; // [km / (km/d)] = [d]
 
+                    //assign correct storage value which was calculated in the last timestep or maxStorage at model day one
 
-                    // assign correct storage value which was calculated in the last timestep or maxStorage at model day one
                     G_riverStoragePrevStep = G_riverStorage[n];
-
 
                     // Computation of river evaporation prior to river storage equation to implement G_dailyRiverEvapo
                     // into storage equation.
@@ -3524,9 +3452,6 @@ void routingClass::routing(const short year, short day, short month, const short
                                                    dailyWaterBalance.G_openWaterPET[n]))
                                                * G_riverAreaFrac[n] / 100. * cellArea / 1000000.;
 
-                        //dailyRiverEvapo = G_dailyRiverEvapo[n] * cellArea *(((double)geo.G_landfreq[n] + (double)geo.G_fwaterfreq[n]) / 100. / 1000000.); //evaporation from rivers in km3
-                        //                  if (transportedVolume > dailyRiverEvapo)
-                        //                  transportedVolume -= G_dailyRiverEvapo[n] * cellArea *(((double)geo.G_landfreq[n] + (double)geo.G_fwaterfreq[n]) / 100. / 1000000.); // subtract dailyRiverevapo from discharge
                         G_dailyRiverPrecip[n] =
                                        dailyWaterBalance.G_openWaterPrec[n] * G_riverAreaFrac[n] / 100. * cellArea /
                                        1000000.; // precip on river fraction in km3
@@ -3545,8 +3470,6 @@ void routingClass::routing(const short year, short day, short month, const short
                     // introduced for 22b, Option 28 "aggrNUsGloLakResOpt"
                     remainingUseRiverStart = remainingUse;
 
-
-
                     // WG22b: Unit of K changed from [d] to [1/d]
                     // Different from global wetlands, RivEvapoRemUseMax is computed based on the ODE dS/dt=In-Out-k*S.
                     // (outflow is assumed to occur even if S = 0 at the end of the time step.
@@ -3559,6 +3482,9 @@ void routingClass::routing(const short year, short day, short month, const short
                         G_riverStorage[n] = 0.;
 
                         transportedVolume = G_riverInflow[n] + G_riverStoragePrevStep - RivEvapoRemUseMax;
+
+                        if (transportedVolume < 0.)   // to avoid the negative transportedvolume error
+                            transportedVolume = 0.;
 
                         if (remainingUse > 0.)
                             remainingUse -= remainingUse * RivEvapoRemUseMax / RiverEvapoRemUse;
@@ -3575,9 +3501,14 @@ void routingClass::routing(const short year, short day, short month, const short
                                             + (1. / K) * (G_riverInflow[n] - RiverEvapoRemUse)
                                               * (1. - exp(-1. * K));
 
+                        if(abs(G_riverStorage[n])<=minStorVol)  //to counter numerical inaccuracies
+                            G_riverStorage[n]=0.;
+
                         transportedVolume =
                                        G_riverInflow[n] + G_riverStoragePrevStep - G_riverStorage[n] - RiverEvapoRemUse;
 
+                        if (transportedVolume < 0.)       // to avoid the negative transportedvolume error
+                            transportedVolume = 0.;
                         remainingUse = 0.;
 
                     }
@@ -3600,36 +3531,8 @@ void routingClass::routing(const short year, short day, short month, const short
                         cout << "G_riverAreaFrac[n]: " << G_riverAreaFrac[n] << ", G_dailyRiverEvapo[n]: "
                              << G_dailyRiverEvapo[n] << ", G_dailyRiverPrecip[n]: " << G_dailyRiverPrecip[n] << endl;
 
-
-                        // transportedVolume = 0.; // set to 0 in those cases.
-
                     }
 
-
-#ifdef _WATERGAP_CHECKS_GLOBAL_H
-                                                                                                                                            // Check Felix Portmann 2015 - for invalid data
-                    // Check when each grid cell is accessed
-                    // From this point on, remainingUse should be positive or zero!
-                    if ( (year >= chk_year) && (month >= chk_month) && (day_in_month >= chk_day_in_month) ) {
-                        check_value_double_LT0(RivEvapoRemUseMax);
-                        check_value_double_LT0(transportedVolume);
-                        check_value_double_LT0(remainingUse);
-                        check_value_double_LT0(remainingUseRes);
-                        check_value_double_LT0(riverVelocity);
-                        check_value_double_LT0(G_riverStoragePrevStep);
-                        check_value_double_LT0(K);
-
-                        check_value_double_NaN(RiverEvapoRemUse);
-                        check_value_double_NaN(RivEvapoRemUseMax);
-                        check_value_double_NaN(transportedVolume);
-                        check_value_double_NaN(remainingUse);
-                        check_value_double_NaN(remainingUseRes);
-                        check_value_double_NaN(riverVelocity);
-                        check_value_double_NaN(G_riverStoragePrevStep);
-                        check_value_double_NaN(K);
-                    }
-                    // end Check Felix Portmann 2015
-#endif
 
                     // Calculate river width (based on storage at the end of current time step) according to new river
                     // flow velocity approach (not implemented for river velocity yet,
@@ -3666,7 +3569,6 @@ void routingClass::routing(const short year, short day, short month, const short
                         if (G_riverAreaReductionFactor[n] > 1.)  // (could occur due to numerical inaccuracies)
                             G_riverAreaReductionFactor[n] = 1.;
 
-
                         // Only continental cells
                         if (geo.G_contcell[n]) {
                             G_riverAreaFracNextTimestep_Frac[n] =
@@ -3681,7 +3583,6 @@ void routingClass::routing(const short year, short day, short month, const short
 
                         // Calculate the necessary percent change toward the next time step
                         G_riverAreaFrac_ChangeFrac[n] = G_riverAreaFracNextTimestep_Frac[n] - G_riverAreaFrac[n];
-
                     }
 
                     // WG22b: Different from global lakes and reservoirs, remaining use (if > 0) is subtracted
@@ -3737,19 +3638,16 @@ void routingClass::routing(const short year, short day, short month, const short
                         // in cell n).
 
                         if ((options.use_alloc > 0) && (G_dailyAllocatedUse[n] > 0.)) {
-                        //if (G_dailyAllocatedUse[n] > 0.) {    // only possible if (options.use_alloc > 0)
 
                             if (remainingUse > 0.) {
 
                                 if (demandWithoutAllocUse > 0.) {
 
-                                    unsatUse = remainingUse;
+                                    unsatUse = remainingUse; // remainingUse of cell n + allocated use
 
-                                    remainingUse = demandWithoutAllocUse - dailyActualUse;    // remainingUse of cell n
+                                    remainingUse = demandWithoutAllocUse - dailyActualUse - unsatGLWDUseOfRiparians;    // remainingUse of cell n
 
-
-                                    if (remainingUse <
-                                        0.)    // since "dailyActualUse" can exceed "demandWithoutAllocUse"
+                                    if (remainingUse < 0.)  // since "dailyActualUse" can exceed "demandWithoutAllocUse"
                                         remainingUse = 0.;
 
                                     unsatAllocUse = unsatUse -
@@ -3800,8 +3698,8 @@ void routingClass::routing(const short year, short day, short month, const short
                                     // to have this as output option.
                                     double sat_alloc_use = (G_AllocUseToNeigborCell[i_nbc] -
                                                                          G_UnsatAllocUse[i_nbc]);
-                                    G_monthlyRedistributeAllocUse[i_nbc][month] += sat_alloc_use;
-                                    G_monthlyRedistributeAllocUse[n][month] -= sat_alloc_use;
+                                    G_monthlyRedistributeAllocUse(i_nbc,month) += sat_alloc_use;
+                                    G_monthlyRedistributeAllocUse(n,month) -= sat_alloc_use;
 
                                     // If "G_UnsatAllocUse[i_nbc]" will be added to the "remainingUse" of "i_nbc" the
                                     // next day, this amount of unsatisfied use must be taken into account to check the
@@ -3825,24 +3723,15 @@ void routingClass::routing(const short year, short day, short month, const short
                                         // WG22b: As in previous versions, subtraction of NUs can be delayed for up to one year.
                                         if (day == 365 &&
                                             (G_CellPositionRoutOrder[i_nbc] < G_CellPositionRoutOrder[n])) {
-
                                             G_totalUnsatisfiedUse[i_nbc] = G_UnsatAllocUse[i_nbc];
                                             G_UnsatAllocUse[i_nbc] = 0.;
-
+                                            G_dailyRemainingUse[i_nbc] = 0.;
                                         }
 
                                     }
-                                    // end if options.delayedUseSatisfaction == 1
-
                                 }
-                                // end if (G_SecondCell[i_nbc] == n)
-
                             }
-                            // end for (i_nbc = 0; i_nbc < ng; i_nbc++)
-
                         }
-                        // end if (G_dailyAllocatedUse[n] > 0.): 'REDISTRIBUTE UNSATISFIED ALLOCATED USE OVER RESPECTIVE NEIGHBORING CELLS'
-
 
                         G_actualUse[n] += dailyActualUse;    // required to write annual value of G_actualUse[n]
 
@@ -3853,13 +3742,13 @@ void routingClass::routing(const short year, short day, short month, const short
                         // monthly satisfied use: satisfied uses from this cell only
                         // monthly actual use: all satisfied uses (see below)
                         if ((2 == options.grid_store) || (4 == options.grid_store) || (6 == options.grid_store)) {
-                            //    G_monthlySatisfiedUse[n][month] += totalDesiredUseCell - remainingUse;	// CR 2015-09: A distinction between satisfied use and actual use is not possible in 22b.
-                            G_monthlyActualUse[n][month] += dailyActualUse;
-                            G_monthlyNUg[n][month] += G_dailydailyNUg[n];
+                            //    G_monthlySatisfiedUse(n,month) += totalDesiredUseCell - remainingUse;	// CR 2015-09: A distinction between satisfied use and actual use is not possible in 22b.
+                            G_monthlyActualUse(n,month) += dailyActualUse;
+                            G_monthlyNUg(n,month) += G_dailydailyNUg[n];
                             // Different from WG22, G_monthlyAllocatedUse does not necessarily have to be fully satisfied in the neighboring cell (nbc).
                             // It is only the water demand allocated to a nbc (without taking into account the current river and SWB storage in the nbc).
-                            G_monthlyAllocatedUse[n][month] += G_dailyAllocatedUse[n];
-                            G_monthlySatisAllocatedUseinSecondCell[n][month] += G_dailySatisAllocatedUseInSecondCell[n];
+                            G_monthlyAllocatedUse(n,month) += G_dailyAllocatedUse[n];
+                            G_monthlySatisAllocatedUseinSecondCell(n,month) += G_dailySatisAllocatedUseInSecondCell[n];
                         }
 
 
@@ -3880,15 +3769,16 @@ void routingClass::routing(const short year, short day, short month, const short
                                     // choose the neighbouring cell with the highest
                                     // amount of river and lake storage
                                     // which is not upstream of cell n
-                                    totalNeighbourStorage = 0.0;
+                                    totalNeighbourStorage = 0.;
                                     secondCell = -1; // standard setting "no downstream cell"
 
                                     for (i = 0; i < 8; i++) {
 
-                                        nbc = G_neighbourCell[n][i] - 1; // number of neighbour cell
+                                        nbc = G_neighbourCell(n,i) - 1; // GCRC id -1 of neighbour cell
+
                                         // For non-continent cells (Caspian Sea in SLM) G_contcell[nbc] == 0,
                                         // set nbc to unaccepted value "-1", to exclude this cell from further calculations here
-                                        if (0 == geo.G_contcell[nbc]) {
+                                        if (geo.G_contcell[nbc] == 0) {
                                             nbc = -1;
                                         }
 
@@ -3901,14 +3791,17 @@ void routingClass::routing(const short year, short day, short month, const short
                                                 // Otherwise, 'storageSum' could become negative, and the initial value of secondCell = -1 would not be updated (secondCell = nbc).
 
                                                 storageSum = G_riverStorage[nbc]
-                                                             + (G_locLakeStorage[nbc] + G_locLakeMaxStorage[nbc])
-                                                             + (G_gloLakeStorage[nbc] + G_gloLakeMaxStorage[nbc]);
+                                                                + G_locLakeStorage[nbc] + G_locLakeMaxStorage[nbc]
+                                                                + G_gloLakeStorage[nbc] + G_gloLakeMaxStorage[nbc];
 
                                                 if (options.resOpt == 1) {
 
                                                     storageSum += G_gloResStorage[nbc];
 
                                                 }
+
+                                              if(storageSum < 1.e-12) //to counter numerical inaccuracies
+                                                  storageSum = 0.;
 
                                                 if (storageSum > totalNeighbourStorage) {
 
@@ -3923,29 +3816,21 @@ void routingClass::routing(const short year, short day, short month, const short
                                                 }
 
                                             }
-                                            // end 'if (G_toBeCalculated[nbc] == 1)' (inner)
 
                                         }
-                                        // endelse neighbouring cell exists
 
                                     }
-                                    // endfor loop over eight cells (G_neighbourCell)
 
                                 }
-                                // end 'if (G_toBeCalculated[n] == 1)' (outer)
 
                                 // WG22b: As in previous versions, subtraction of NUs can be delayed for up to one year.
                                 if (day == 365 && (G_CellPositionRoutOrder[secondCell] < G_CellPositionRoutOrder[n]))
                                     secondCell = -1;
 
                             }
-                                // end 'if (remainingUse > 0.)'	(Identification of secondCell)
                             else {
                                 secondCell = -1;
-
                             }
-                            // end 'else: remainingUse == 0.'
-
 
                             if (secondCell < 0) {    // remainingUse can be >= 0 at this point
 
@@ -3969,7 +3854,6 @@ void routingClass::routing(const short year, short day, short month, const short
 
 
                             }
-                                // end if (secondCell < 0)
 
                             else {    // secondCell > 0: remainingUse is always > 0. in this case
 
@@ -4006,19 +3890,17 @@ void routingClass::routing(const short year, short day, short month, const short
                                 // G_totalUnsatisfiedUse[n] is not changed in this timestep.
 
                             }
-                            // end else (secondCell > 0): remainingUse is always > 0. in this case
 
                             G_SecondCell[n] = secondCell;
 
                         }
-                            // end 'if (options.use_alloc > 0)': 'ALLOCATION OF REMAINING USE TO SECOND CELL'
 
                         else {    // (options.use_alloc == 0)	(remainingUse can be >= 0 at this point)
 
                             if (options.delayedUseSatisfaction == 1) {
                                 // NAg adaption happens on a daily basis thus it is compared to the
-                                // G_totalUnsatisfiedUse from last time step before assining remainingUse.
-                                G_dailyRemainingUse[n] = remainingUse - G_totalUnsatisfiedUse[n];
+                                // G_totalUnsatisfiedUse from last time step before assigning remainingUse.
+                                G_dailyRemainingUse[n] = remainingUse - G_PrevTotalUnstatisfiedUse[n];
                                 G_totalUnsatisfiedUse[n] = remainingUse;
                             }
                             else {
@@ -4029,10 +3911,13 @@ void routingClass::routing(const short year, short day, short month, const short
                                 G_dailyRemainingUse[n] = remainingUse;
                             }
                         }
-                        // end else(options.use_alloc == 0)
-
+                        // together with G_dailyRemainingUse G_withdrawalIrrigFromSWB and
+                        // G_consumptiveUseIrrigFromSWB are used to calculate correct returnflow reduction in
+                        // case of allocation this information must origin from the timestep, when it is
+                        // allocated, thus it is assigned here
+                        G_withdrawalIrrigFromSwb[n] = G_monthlyWUIrrigFromSwb(n, month) / (1000000000. * (double) numberOfDaysInMonth[month]);
+                        G_consumptiveUseIrrigFromSwb[n] = G_monthlyCUIrrigFromSwb(n, month) / (1000000000. * (double) numberOfDaysInMonth[month]);
                     }
-                    // end if options.subtract_use >= 1
 
                     // Computation of SWB and land area fractions at the end of 'routing'.
 
@@ -4041,20 +3926,25 @@ void routingClass::routing(const short year, short day, short month, const short
                     // WG22b: The river availability represents the water resource of a cell (including inland sinks).
                     // Thus, the outflow of SWB should be taken into account in inland sinks as well.
 
-                    if (1 ==
-                        options.statcorrOpt) // if station correction is used, multiply discharge with station correction (e.g. for calibration).
+                    if (1 == options.statcorrOpt)
+                        // if station correction is used, multiply discharge with station correction (e.g. for calibration).
                         transportedVolume *= G_statCorrFact[n];
 
                     // WG22b: New approach to compute CellRunoff:
-                    CellRunoff = (transportedVolume - inflowUpstream);
+                    // in inland sinks, transportedVolume will be added to AET later, hence CellRunoff gets negative.
+                    if (G_LDD[n] < 0) {
+                        CellRunoff = 0. - inflowUpstream;
+                        G_transportedVolume_for_AET[n] = transportedVolume;
+                    } else {
+                        CellRunoff = (transportedVolume - inflowUpstream);
+                    }
 
 
                     //-------------------------------------for daily velocity file----------------------
                     if (options.day_store == 1) {
                         for (b = 0; b <= nSpecBasins - 1; b++) {
                             if (n == cbasin.cellNum[b] - 1) {
-                                //dailyRiverVelocity[b][day-1] = riverVelocity * timeStepsPerDay / 86.4;	// //km/timeStep --> km/day --> m/sec ((60*60*24)/1000)
-                                dailyRiverVelocity[b][day - 1] += (riverVelocity /
+                                dailyRiverVelocity(b,day - 1) += (riverVelocity /
                                                                    86.4); // //km/d --> m/s ((60*60*24)/1000)
                                 break;
                             }
@@ -4074,52 +3964,58 @@ void routingClass::routing(const short year, short day, short month, const short
                     if ((2 == options.grid_store) || (4 == options.grid_store) || (6 == options.grid_store)) {
                         // G_monthlyCellRunoff should be defined as the inflow from global lakes,
                         // when calculating total inflow to reservoirs.
-                        // G_monthlyCellRunoff[n][month] 			+= res_inflow;
 
                         // use precip on land, wetlands and local lakes and global lakes and reservoirs if they occur ans all only on continental area in km3
                         // Only continental cells
                         // each other cell that contains continental area
                         // ATTENTION/POTENTIAL ERROR: G_dailyRiverPrecip[n] is not taken into account in calculationg G_landWaterExclGloLakAreaFrac[n]
 
-
                         if (geo.G_contcell[n]) {
-                            G_monthlyConsistentPrecip[n][month] += (
+                            G_monthlyConsistentPrecip(n,month) += (
                                            (dailyWaterBalance.G_openWaterPrec[n] * G_landWaterExclGloLakAreaFrac[n] /
                                             geo.G_contfreq[n]) *
                                            ((geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) / 1000000.) +
                                            G_GloLakePrecip[n] + G_ReservoirPrecip[n] + G_dailyRiverPrecip[n]);
+
+                            // Only for runs which consider glaciers
+                            if ((options.glacierOpt == 1) && (G_glacAdaptedArea[n] > 0.)) // for glacierized cells only
+                                // Adapt consistent precipitation by assigning precipitation from GGM forcing
+                                // over glacier area fraction instead of precipitation from WGHM forcing
+                                G_monthlyConsistentPrecip(n,month) =
+                                               G_monthlyConsistentPrecip(n,month) - (dailyWaterBalance.G_openWaterPrec[n] * G_glacAdaptedArea[n] / 1000000.) + G_glacPrecip[n];
                         }
                             // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                             // inner Caspian lake cell (not belonging to a continent)
                         else {
-                            G_monthlyConsistentPrecip[n][month] = 0.;
+                            G_monthlyConsistentPrecip(n,month) = 0.;
                         }
 
                         // add cell runoff to monthly cell runoff
-                        G_monthlyCellRunoff[n][month] += CellRunoff;
+                        G_monthlyCellRunoff(n,month) += CellRunoff;
 
                         // Only continental cells
                         // each other cell that contains continental area
                         if (geo.G_contcell[n]) {
-                            G_monthlyCellSurfaceRunoff[n][month] += ((CellRunoff - G_localGWRunoff[n])
+                            G_monthlyCellSurfaceRunoff(n,month) += ((CellRunoff - G_localGWRunoff[n])
                                                                      / (cellArea * (geo.G_contfreq[n] / 100.)) *
                                                                      1000000.);
                         }
                             // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                             // inner Caspian lake cell (not belonging to a continent)
                         else {
-                            G_monthlyCellSurfaceRunoff[n][month] = 0.;
+                            G_monthlyCellSurfaceRunoff(n,month) = 0.;
                         }
 
-                        // add transportedVolume to monthly cell runoff
-                        G_monthlyRiverAvail[n][month] += transportedVolume;
+                        // add transportedVolume to monthly cell runoff (only outside of inland sinks)
+                        if (G_LDD[n] >= 0)
+                            G_monthlyRiverAvail(n,month) += transportedVolume;
 
                         if (options.outRiverInUpstream)
-                            G_monthlyRiverInUpstream[n][month] += inflowUpstream;
+                            G_monthlyRiverInUpstream(n,month) += inflowUpstream;
 
 
                         // add riverVelocity to monthlyVelocity
-                        G_monthlyVelocity[n][month] += (riverVelocity / 86.4); // velocity grid [m/s]
+                        G_monthlyVelocity(n,month) += (riverVelocity / 86.4); // velocity grid [m/s]
                         // for those cells which are defined as inland sinks and do have considerable lake/wetland area (>'0'),
                         // river availability should be updated, otherwise river availability on basin scale could be '0'
 
@@ -4129,28 +4025,30 @@ void routingClass::routing(const short year, short day, short month, const short
                         // monthly min and max river availability output start
                         //most certainly to be rationalised
                         if (options.outMinMaxRiverAvail) {
-                            if (day_in_month == 1) {
-                                G_monthlyMinRiverAvail[n][month] = transportedVolume;
-                                G_monthlyMaxRiverAvail[n][month] = transportedVolume;
-                            } else {
-                                if (transportedVolume > G_monthlyMaxRiverAvail[n][month])
-                                    G_monthlyMaxRiverAvail[n][month] = transportedVolume;
-                                if (transportedVolume < G_monthlyMinRiverAvail[n][month])
-                                    G_monthlyMinRiverAvail[n][month] = transportedVolume;
+                            if (G_LDD[n] >= 0) {
+                                if (day_in_month == 1) {
+                                    G_monthlyMinRiverAvail(n,month) = transportedVolume;
+                                    G_monthlyMaxRiverAvail(n,month) = transportedVolume;
+                                } else {
+                                    if (transportedVolume > G_monthlyMaxRiverAvail(n,month))
+                                        G_monthlyMaxRiverAvail(n,month) = transportedVolume;
+                                    if (transportedVolume < G_monthlyMinRiverAvail(n,month))
+                                        G_monthlyMinRiverAvail(n,month) = transportedVolume;
+                                }
                             }
                         }
                         // monthly min and max river availability output end
-                        if (options.outRiverPET == 1) G_monthlyRiverAreaFrac[n][month] += G_riverAreaFrac[n];
+                        if (options.outRiverPET == 1) G_monthlyRiverAreaFrac(n,month) += G_riverAreaFrac[n];
                         if (options.outRiverPET == 1)
-                            G_monthlyRiverPET[n][month] += G_dailyRiverEvapo[n] * 1000000. /
+                            G_monthlyRiverPET(n,month) += G_dailyRiverEvapo[n] * 1000000. /
                                                            (G_riverAreaFrac[n] / 100. * cellArea); //km3 > mm
                         //output for reservoir and storages start
                         if ((options.antNatOpt == 0) && (options.resOpt == 1)) {
-                            G_monthlyResInflow[n][month] += G_daily_res_in[n]; // total inflow in month [m3/timeStepsPerDay] -> [m3/month]
-                            G_monthlyResOutflow[n][month] += G_daily_res_out[n]; // total outflow in month [m3/timeStepsPerDay] -> [m3/month]
+                            G_monthlyResInflow(n,month) += G_daily_res_in[n]; // total inflow in month [m3/timeStepsPerDay] -> [m3/month]
+                            G_monthlyResOutflow(n,month) += G_daily_res_out[n]; // total outflow in month [m3/timeStepsPerDay] -> [m3/month]
 
                             if (options.grid_store_TypeForStorages == 1)
-                                G_monthlySurfStor[n][month] +=
+                                G_monthlySurfStor(n,month) +=
                                                (G_locLakeStorage[n]
                                                 + G_locWetlStorage[n]
                                                 + G_gloLakeStorage[n]
@@ -4159,32 +4057,28 @@ void routingClass::routing(const short year, short day, short month, const short
                                                 + G_gloResStorage[n]);
 
                         }
-                            // endif options.resOpt
                         else {
-                            // formerly "else if (options.resOpt == 0)"
                             // mean value of total surface water storage in grid cell (lakes/wetlands/rivers) [km3] (converted to mm for optional output in a later step)
                             if (options.grid_store_TypeForStorages == 1)
-                                G_monthlySurfStor[n][month] +=
+                                G_monthlySurfStor(n,month) +=
                                                (G_locLakeStorage[n]
                                                 + G_locWetlStorage[n]
                                                 + G_gloLakeStorage[n]
                                                 + G_gloWetlStorage[n]
                                                 + G_riverStorage[n]);
-                            // / (cellArea * (geo.G_contfreq[n] / 100.)) * 1000000. / timeStepsPerDay );
                         }
 
                         if (options.outGwrSwb == 1)
-                            G_monthlyGwrSwb[n][month] += G_gwr_swb[n];
+                            G_monthlyGwrSwb(n,month) += G_gwr_swb[n];
 
-                        // if (options.outFswb == 1)
-                        //     G_monthlyFswb[n][month] += G_fswb[n];
-                        G_monthlyLocWetlExtent[n][month] += G_locwetlextent[n];
-                        G_monthlyGloWetlExtent[n][month] += G_glowetlextent[n];
+                        G_monthlyLocWetlExtent(n,month) += G_locwetlextent[n];
+                        G_monthlyGloWetlExtent(n,month) += G_glowetlextent[n];
 
+                        //output of monthly groundwater recharge below surface water bodies in a gridcell
+                        if (options.outGwrunSurfrun == 1)
+                            G_monthlyGwrunSurfrun(n,month) += groundwater_runoff_km3 + dailyLocalSurfaceRunoff; // in km3 day-1
 
                     }
-                    // endif options ((2 == options.grid_store) || (4 == options.grid_store) || (6 == options.grid_store))
-                    // monthly output (possibly combined with daily output) endstart
 
                     // daily output option 31 start
                     if ((3 == options.grid_store) || (4 == options.grid_store)) {
@@ -4192,75 +4086,74 @@ void routingClass::routing(const short year, short day, short month, const short
                         if (options.outPrecDaily) {
                             // Only continental cells
                             if (geo.G_contcell[n]) {
-                                G_daily31ConsistentPrecip[n][day_in_month - 1] = (
+                                G_daily31ConsistentPrecip(n,day_in_month - 1) = (
                                                (dailyWaterBalance.G_openWaterPrec[n] *
                                                 G_landWaterExclGloLakAreaFrac[n] / geo.G_contfreq[n]) *
                                                ((geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) / 1000000.) +
                                                G_GloLakePrecip[n] + G_ReservoirPrecip[n] + G_dailyRiverPrecip[n]);
+
+                                // Only for runs which consider glaciers
+                                if ((options.glacierOpt == 1) && (G_glacAdaptedArea[n] > 0.)) // for glacierized cells only
+                                    // Adapt consistent precipitation by assigning precipitation from GGM forcing
+                                    // over glacier area fraction instead of precipitation from WGHM forcing
+                                    G_daily31ConsistentPrecip(n,day_in_month - 1) =
+                                                   G_daily31ConsistentPrecip(n,day_in_month - 1) - (dailyWaterBalance.G_openWaterPrec[n] * G_glacAdaptedArea[n] / 1000000.) + G_glacPrecip[n];
                             }
                                 // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                             else {
-                                G_daily31ConsistentPrecip[n][day_in_month - 1] = 0.;
+                                G_daily31ConsistentPrecip(n,day_in_month - 1) = 0.;
                             }
-                        } // endif options.outPrecDaily
+                        }
 
                         if (options.outCellRunoffDaily)
-                            G_daily31CellRunoff[n][day_in_month - 1] = CellRunoff;
+                            G_daily31CellRunoff(n,day_in_month - 1) = CellRunoff;
 
                         if (options.outCellSurfaceDaily) {
-                            //  Only continental cells
+                            // Only continental cells
                             if (geo.G_contcell[n]) {
-                                G_daily31CellSurfaceRunoff[n][day_in_month - 1] =
+                                G_daily31CellSurfaceRunoff(n,day_in_month - 1) =
                                                (CellRunoff - G_localGWRunoff[n])
                                                / (cellArea * (geo.G_contfreq[n] / 100.)) * 1000000.;
                             }
                                 // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                             else {
-                                G_daily31CellSurfaceRunoff[n][day_in_month - 1] = 0.;
+                                G_daily31CellSurfaceRunoff(n,day_in_month - 1) = 0.;
                             }
-                        } // endif options.outCellSurfaceDaily
+                        }
 
-                        if (options.outRiverAvailDaily) {
-                            G_daily31RiverAvail[n][day_in_month - 1] = transportedVolume;  // FP20160926N001
+                        if ((options.outRiverAvailDaily) && (G_LDD[n] >= 0)){
+                            G_daily31RiverAvail(n,day_in_month - 1) = transportedVolume;
 
                             // for those cells which are defined as inland sinks and do have considerable lake/wetland area (>'0'),
                             // river availability should be updated, otherwise river availability on basin scale could be '0'
-
-                            // WG22b: The river availability represents the water resource of a cell (including inland sinks).
-                            // Thus, the outflow of SWB should be taken into account in inland sinks as well.
-                        } // endif options.outRiverAvailDaily
+                        }
 
                         if (options.outRiverVeloDaily)
-                            G_daily31Velocity[n][day_in_month - 1] = (riverVelocity /
+                            G_daily31Velocity(n,day_in_month - 1) = (riverVelocity /
                                                                       86.4); // velocity grid [m/s]
 
                         if (options.outGwrSwbDaily)
-                            G_daily31GwrSwb[n][day_in_month -
-                                               1] = G_gwr_swb[n]; // daily gwr below surface water bodies [mm]
+                            G_daily31GwrSwb(n,day_in_month - 1) = G_gwr_swb[n]; // daily gwr below surface water bodies [mm]
                         if (options.outGWRunoffDaily)
                             // daily fraction of surface water bodies [mm]
-                            G_daily31GwRunoff[n][day_in_month -
-                                                 1] = groundwater_runoff_km3; // daily fraction of surface water bodies [mm]
+                            G_daily31GwRunoff(n,day_in_month -1) = groundwater_runoff_km3; // daily fraction of surface water bodies [mm]
                         if (options.outGwrunSurfrunDaily)
-                            G_daily31GwrunSurfrun[n][day_in_month - 1] =
+                            G_daily31GwrunSurfrun(n,day_in_month - 1) =
                                            groundwater_runoff_km3 + dailyLocalSurfaceRunoff; // in km3 day-1
                         if (options.outLandAreaFracDaily)
-                            G_daily31LandAreaFrac[n][day_in_month - 1] = G_landAreaFrac[n];
+                            G_daily31LandAreaFrac(n,day_in_month - 1) = G_landAreaFrac[n];
                         if (options.outCellAETWCaDaily) // add NAg and actual use SW and later AET
-                            G_daily31CellAETWCa[n][day_in_month - 1] =
+                            G_daily31CellAETWCa(n,day_in_month - 1) =
                                            dailyActualUse + G_dailydailyNUg[n]; //already in km3 day-1
                     }
-                    // endif option ((3 == options.grid_store) || (4 == options.grid_store))
-                    // daily output option 31 end
 
                     // daily output option 365 start
-
                     if ((5 == options.grid_store) || (6 == options.grid_store)) {
 
                         if (options.outPrecDaily || ((options.scoutcPrecip) && (2 == options.day_store))) {
-                            // FP 2015-06 // Only continental cells
+                            // Only continental cells
                             if (geo.G_contcell[n]) {
-                                G_daily365ConsistentPrecip[n][day - 1] = ((dailyWaterBalance.G_openWaterPrec[n] *
+                                G_daily365ConsistentPrecip(n,day - 1) = ((dailyWaterBalance.G_openWaterPrec[n] *
                                                                            G_landWaterExclGloLakAreaFrac[n] /
                                                                            geo.G_contfreq[n]) *
                                                                           ((geo.areaOfCellByArrayPos(n) *
@@ -4268,102 +4161,363 @@ void routingClass::routing(const short year, short day, short month, const short
                                                                           G_GloLakePrecip[n] + G_ReservoirPrecip[n] +
                                                                           G_dailyRiverPrecip[n]);
 
+                                // Only for runs which consider glaciers
+                                if ((options.glacierOpt == 1) && (G_glacAdaptedArea[n] > 0.)) // for glacierized cells only
+                                    // Adapt consistent precipitation by assigning precipitation from GGM forcing
+                                    // over glacier area fraction instead of precipitation from WGHM forcing
+                                    G_daily365ConsistentPrecip(n,day - 1) =
+                                                   G_daily365ConsistentPrecip(n,day - 1) - (dailyWaterBalance.G_openWaterPrec[n] * G_glacAdaptedArea[n] / 1000000.) + G_glacPrecip[n];
+
                             }
                                 // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                             else {
-                                G_daily365ConsistentPrecip[n][day - 1] = 0.;
+                                G_daily365ConsistentPrecip(n,day - 1) = 0.;
                             }
                         }
 
                         if ((options.outGwrSwbDaily) || ((options.scoutGwrSwb) && (2 == options.day_store)))
-                            G_daily365GwrSwb[n][day - 1] = G_gwr_swb[n];
-                        //if ((options.outFswbDaily)||((options.scoutFswb)&&(2==options.day_store)))
-                        //    G_daily365Fswb[n][day - 1] = G_fswb[n];
+                            G_daily365GwrSwb(n,day - 1) = G_gwr_swb[n];
                         if ((options.outGWRunoffDaily) || ((options.scoutGwRunoff) && (2 == options.day_store)))
                             //HMS 2017-02-03 the following line was included but makes no sense, or?
-                            //G_daily365GwRunoff[n][day - 1] = G_groundwaterStorage[n];
-                            G_daily365GwRunoff[n][day - 1] = groundwater_runoff_km3;
+                            G_daily365GwRunoff(n,day - 1) = groundwater_runoff_km3;
                         if (options.outGwrunSurfrunDaily)
-                            G_daily365GwrunSurfrun[n][day - 1] = groundwater_runoff_km3 + dailyLocalSurfaceRunoff;
+                            G_daily365GwrunSurfrun(n,day - 1) = groundwater_runoff_km3 + dailyLocalSurfaceRunoff;
                         if ((options.outLandAreaFracDaily) || ((options.scoutLandAreaFrac) && (2 == options.day_store)))
-                            G_daily365LandAreaFrac[n][day - 1] = G_landAreaFrac[n];
+                            G_daily365LandAreaFrac(n,day - 1) = G_landAreaFrac[n];
 
                         if (options.outCellRunoffDaily ||
                             (((options.scoutCellRunoffkm3) || (options.scoutCellRunoffmm)) &&
                              (2 == options.day_store))) {
-                            G_daily365CellRunoff[n][day - 1] = CellRunoff;  // FP20160926N001
-                            // FP 2015-06 // Only continental cells
+                            G_daily365CellRunoff(n,day - 1) = CellRunoff;
+                            // Only continental cells
                             if (geo.G_contcell[n]) {
-                                G_daily365CellRunoff_mm[n][day - 1] =
+                                G_daily365CellRunoff_mm(n,day - 1) =
                                                CellRunoff / (cellArea * (geo.G_contfreq[n] / 100.)) *
-                                               1000000.;  // FP20160926N001
+                                               1000000.;
                             }
                                 // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                             else {
-                                G_daily365CellRunoff_mm[n][day - 1] = 0.;
+                                G_daily365CellRunoff_mm(n,day - 1) = 0.;
                             }
                         }
-                        // endif options
 
                         if (options.outCellSurfaceDaily ||
-                            ((options.scoutCellSRunoff) && (2 == options.day_store))) { // FP20160915N002
+                            ((options.scoutCellSRunoff) && (2 == options.day_store))) {
                             // Only continental cells
                             // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                             if (geo.G_contcell[n]) {
-                                G_daily365CellSurfaceRunoff[n][day - 1] = (CellRunoff - G_localGWRunoff[n]) /
+                                G_daily365CellSurfaceRunoff(n,day - 1) = (CellRunoff - G_localGWRunoff[n]) /
                                                                           (cellArea * (geo.G_contfreq[n] / 100.)) *
-                                                                          1000000.;  // FP20160926N001
+                                                                          1000000.;
                             }
-                                // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
+                            // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                             else {
-                                G_daily365CellSurfaceRunoff[n][day - 1] = 0.;
+                                G_daily365CellSurfaceRunoff(n,day - 1) = 0.;
                             }
                         }
-                        // endif options
 
-                        if (options.outRiverAvailDaily || ((options.scoutQ) && (2 == options.day_store))) {
-                            G_daily365RiverAvail[n][day - 1] = transportedVolume;  // FP20160926N001
-                            // for those cells which are defined as inland sinks and do have considerable lake/wetland area (>'0'),
-                            // river availability should be updated, otherwise river availability on basin scale could be '0'
-                            // WG22b: The river availability represents the water resource of a cell (including inland sinks).
-                            // Thus, the outflow of SWB should be taken into account in inland sinks as well.
-                            /*if (G_LDD[n] == -1) {
-                                if ((G_glo_wetland[n] > 0) || (G_lake_area[n] > 0))
-                                    G_daily365RiverAvail[n][day - 1] += (inflowUpstream - transportedVolume);
-                            }*/
+                        if ((options.outRiverAvailDaily || ((options.scoutQ) && (2 == options.day_store))) && (G_LDD[n] >= 0)) {
+                            G_daily365RiverAvail(n,day - 1) = transportedVolume;
                         }
                         if (options.outCellAETWCaDaily)
-                            G_daily365CellAETWCa[n][day - 1] =
+                            G_daily365CellAETWCa(n,day - 1) =
                                            dailyActualUse + G_dailydailyNUg[n]; //already in km3 day-1
-                        // endif options
 
                         if ((options.outRiverVeloDaily) || ((options.scoutFlowVelo) && (2 == options.day_store)))
-                            G_daily365Velocity[n][day - 1] = (riverVelocity /
-                                                              86.4); // velocity grid [m/s]  // FP20160926N001
+                            G_daily365Velocity(n,day - 1) = (riverVelocity /
+                                                              86.4); // velocity grid [m/s]
 
                     }
-                    // endif option
-                    // daily output option 365 end
 
                     for (b = 0; b <= nSpecBasins - 1; b++) {
                         if (n == cbasin.cellNum[b] - 1) {
-                            dailyRiverDischarge[b][day - 1] += transportedVolume;
+                            if (G_LDD[n] >= 0)
+                                dailyRiverDischarge(b,day - 1) += transportedVolume;
                             break;
                         }
                     }
-                    // endfor loop over nSpecBasins
-
                 }
-                // for next loop in timeStepsPerDay
+                //--------------------------------------------------------------------------
+                // calculation of water temperature 1 without power plant 2 with power plant
+                if (options.calc_wtemp == 1 || options.calc_wtemp == 2) {
+
+                    if(options.calc_wtemp == 2) {
+                        cwt.tsf.calcTempPP = true;
+                        cwt.tsf.powerPlantWW = G_yearlyWW[n] / 1.e9 / 365.; // [m3/a] --> [km3/d]
+                        cwt.tsf.powerPlantWC = G_yearlyWC[n] / 1.e9 / 365.; // [m3/a] --> [km3/d]
+                    }
+                    else
+                        cwt.tsf.calcTempPP = false;
+
+                    for (int i = 0; i < 9; i++) {
+                        if (G_inflow_cells(n, i) != 0) {
+                            cwt.tsf.cellInflows.push_back(G_RiverAvailPreStep[G_inflow_cells(n,i)-1]);       // Inflow previous step
+                            cwt.tsf.cellInflowsTemp.push_back(G_RiverWTempPreStep[G_inflow_cells(n,i)-1]);   // temperature previous step
+                        }
+                        else if(i==4) { // current cell
+                            cwt.tsf.cellInflows.push_back(0.);
+                            cwt.tsf.cellInflowsTemp.push_back(G_RiverWTempPreStep[n]);    // for river calculation temperature prev day needed
+                        }
+                        else { // no inflow from this direction
+                            cwt.tsf.cellInflows.push_back(0.);
+                            cwt.tsf.cellInflowsTemp.push_back(15.);    // temperature irrelevant bc. no associated volume; only to write something into this place
+                        }
+                    }
+
+                    // ice thickness from prev day
+                    cwt.tsf.iceThickness[0] = G_iceThicknessRiver[n];
+                    cwt.tsf.iceThickness[1] = G_iceThicknesslocLake[n];
+                    cwt.tsf.iceThickness[2] = G_iceThicknesslocWetland[n];
+                    cwt.tsf.iceThickness[3] = G_iceThicknessGloLake[n];
+                    cwt.tsf.iceThickness[4] = G_iceThicknessReservoir[n];
+                    cwt.tsf.iceThickness[5] = G_iceThicknessGloWetland[n];
+
+                    cwt.tsf.ShortRad = climate.G_shortwave_d(n, day_in_month - 1);  // [W/m2]
+                    cwt.tsf.LongRad = climate.G_longwave_d(n, day_in_month - 1);    // [W/m2]
+                    cwt.tsf.AirTempC = climate.G_temperature_d(n, day_in_month - 1); // [degC]
+                    if (climate.G_GW_Temperature_y[n] < 0.) // groundwater cannot be below 0 degC
+                        cwt.tsf.GWTemp = 0.;    // [degC]
+                    else
+                        cwt.tsf.GWTemp = climate.G_GW_Temperature_y[n];     // [degC]
+
+                    cwt.tsf.CellCorrFact = dailyWaterBalance.G_cellCorrFact[n];
+                    cwt.tsf.openWaterPET = dailyWaterBalance.G_openWaterPET[n];     // [mm]
+                    cwt.tsf.openWaterPrecip = dailyWaterBalance.G_openWaterPrec[n]; // [mm]
+                    cwt.tsf.CellArea = cellArea;    // [km2]
+
+                    // locLake
+                    cwt.tsf.locLakeArea = G_loc_lake[n];    //[%]
+                    cwt.tsf.locLakeStorPrevStep = G_locLakeStoragePrevStep + (G_loc_lake[n] / 100.) * cellArea * G_lakeDepthActive[n]; // + maxStorage so no neg. vol. occurs
+                    cwt.tsf.locLakeTempPrevStep = G_locLakeTempPrevStep[n];
+                    cwt.tsf.dailyLocLakeEvapo = G_dailyLocLakeEvapo[n];
+                    cwt.tsf.locLakeAreaRedFactor = locLakeAreaReductionFactor;
+                    cwt.tsf.localRunoff = G_localRunoff[n];
+                    cwt.tsf.localGWRunoff = G_localGWRunoff[n];
+
+                    // locWetland
+                    cwt.tsf.locWetlandArea = G_loc_wetland[n];  //[%]
+                    cwt.tsf.locWetlandStorPrevStep = G_locWetlStoragePrevStep;
+                    cwt.tsf.locWetlandTempPrevStep = G_locWetlTempPrevStep[n];
+                    cwt.tsf.dailyLocWetlandEvapo = G_dailyLocWetlEvapo[n];
+                    cwt.tsf.locWetlandAreaRedFactor = locWetlAreaReductionFactor;
+                    cwt.tsf.inflowLocWetland = outflowlocLake;
+                    cwt.tsf.outflowLocWetland = outflowlocWetl;
+
+                    // gloLake
+                    cwt.tsf.gloLakeArea = G_lake_area[n];   //[km2]
+                    cwt.tsf.gloLakeStorPrevStep = G_gloLakeStoragePrevStep + ((double) G_lake_area[n]) * G_lakeDepthActive[n];  // + maxStorage so no neg. volume occurs
+                    cwt.tsf.gloLakeTempPrevStep = G_gloLakeTempPrevStep[n];
+                    cwt.tsf.dailyGloLakeEvapo = G_dailyGloLakeEvapo[n];
+                    // total river inflows from different cells
+                    cwt.tsf.inflowGloLake = 0.;
+                    for (int i = 0; i < 9; i++) {
+                        cwt.tsf.inflowGloLake += cwt.tsf.cellInflows[i];
+                    }
+                    if (G_loc_wetland[n] > 0.)                      // add outflow from locWetland or locLake if exists
+                        cwt.tsf.inflowGloLake += outflowlocWetl;
+                    else if (G_loc_lake[n] > 0.)
+                        cwt.tsf.inflowGloLake += outflowlocLake;
+
+                    // reservoir
+                    if (G_lake_area[n] > 0.)                        // for correct inflow volume if no gloLake
+                        cwt.tsf.inflowReservoir = outflowGloLake;
+                    else
+                        cwt.tsf.inflowReservoir = cwt.tsf.inflowGloLake;
+                    cwt.tsf.reservoirArea = G_reservoir_area[n];    //[km2]
+                    cwt.tsf.reservoirStorPrevStep = G_gloResStoragePrevStep;
+                    cwt.tsf.reservoirTempPrevStep = G_reservoirTempPrevStep[n];
+                    cwt.tsf.dailyReservoirEvapo = G_dailyResEvapo[n];
+
+                    // gloWetlands
+                    if (G_reservoir_area[n] > 0.)              // for correct inflow for different conditions of existence of lakes,... in cell
+                        cwt.tsf.gloWetlandInflow = G_daily_res_out[n];
+                    else if (G_lake_area[n] > 0.)
+                        cwt.tsf.gloWetlandInflow = outflowGloLake;
+                    else
+                        cwt.tsf.gloWetlandInflow = cwt.tsf.inflowGloLake;
+                    cwt.tsf.gloWetlandArea = G_glo_wetland[n];  //[%]
+                    cwt.tsf.gloWetlandStorPrevStep = G_gloWetlStoragePrevStep;
+                    cwt.tsf.gloWetlandTempPrevStep = G_gloWetlandTempPrevStep[n];
+                    cwt.tsf.dailyGloWetlandEvapo = G_dailyGloWetlEvapo[n];
+                    cwt.tsf.gloWetlandAreaReductionFactor = gloWetlAreaReductionFactor;
+
+                    // River (if River Evapo is implemented in WaterGAP (currently not as of May 2020) handover here for temperature computation)
+                    if (G_glo_wetland[n] > 0.)                 // for correct inflow for different conditions of existence of lakes,... in cell
+                        cwt.tsf.RiverInflow = outflowGloWetland;
+                    else if (G_reservoir_area[n] > 0.)
+                        cwt.tsf.RiverInflow  = G_daily_res_out[n];
+                    else if (G_lake_area[n] > 0.)
+                        cwt.tsf.RiverInflow  = outflowGloLake;
+                    else
+                        cwt.tsf.RiverInflow  = cwt.tsf.inflowGloLake;
+                    cwt.tsf.RiverStor = G_riverStorage[n];
+                    cwt.tsf.localGWRunoffIntoRiver = G_localGWRunoffIntoRiver[n];
+                    cwt.tsf.localRunoffIntoRiver = G_localRunoffIntoRiver[n];
+                    cwt.tsf.RiverBottomWidth = G_riverBottomWidth[n];
+                    cwt.tsf.RiverLength = G_riverLength[n];
+                    cwt.tsf.RiverLengthCheck = G_riverLengthCheck[n];       // needed bc. G_riverLength is changed after read in
+
+                    if (G_downstreamCell[n] > 0)                // check if cell has outflow;
+                        cwt.tsf.hasOutflow = true;
+                    else
+                        cwt.tsf.hasOutflow = false;
+
+                    // [0] outflow/river, [1] locLake, [2] locWetland, [3] gloLake, [4] reservoir, [5] gloWetland; if non existent in cell -9999. as temp
+                    // ice thickness [6] river, [7] locLake, [8] locWetland, [9] gloLake, [10] reservoir, [11] gloWetland
+                    calcWTempReturns = cwt.calcWTemp(cwt.tsf);
+
+                    G_iceThicknessRiver[n] = calcWTempReturns[6];
+                    G_iceThicknesslocLake[n] = calcWTempReturns[7];
+                    G_iceThicknesslocWetland[n] = calcWTempReturns[8];
+                    G_iceThicknessGloLake[n] = calcWTempReturns[9];
+                    G_iceThicknessReservoir[n] = calcWTempReturns[10];
+                    G_iceThicknessGloWetland[n] = calcWTempReturns[11];
+
+                    if(options.outWaterTempDaily)
+                        G_daily31WaterTemp(n, day_in_month - 1) = calcWTempReturns[0];      // daily31 output
+
+                    if (options.outWaterTempMonthly) {
+                        if (calcWTempReturns[0] >= 0.) {
+                            SumWaterTempRiver[n] += calcWTempReturns[0];                              // for calculation of monthly mean Water Temp
+                            NumWaterTempRiver[n] += 1.;                                         // needed bc. of possibility of -9999. (no calculated temperature)
+                        }
+                        if (day_in_month == numberOfDaysInMonth[month] && NumWaterTempRiver[n] > 0.) {
+                            G_monthlyMeanWaterTempRiver(n, month) = SumWaterTempRiver[n] / NumWaterTempRiver[n];    // monthly output
+                            SumWaterTempRiver[n] = 0.;
+                            NumWaterTempRiver[n] = 0.;
+                        } else
+                            G_monthlyMeanWaterTempRiver(n, month) = -9999.;
+                    }
+
+                    // output of all SWB separately as daily31
+                    if (options.outWaterTempDailyAllSWB) {
+                        G_daily31locLakeTemp(n, day_in_month - 1) = calcWTempReturns[1];
+                        G_daily31locWetlTemp(n, day_in_month - 1) = calcWTempReturns[2];
+                        G_daily31gloLakeTemp(n, day_in_month - 1) = calcWTempReturns[3];
+                        G_daily31reservoirTemp(n, day_in_month - 1) = calcWTempReturns[4];
+                        G_daily31gloWetlandTemp(n, day_in_month - 1) = calcWTempReturns[5];
+                    }
+
+                    // output of all SWB separately as monthly
+                    if(options.outWaterTempMonthlyAllSWB){
+                        // locLake
+                        if (calcWTempReturns[1] >= 0.) {
+                            SumWaterTempLocLake[n] += calcWTempReturns[1];                              // for calculation of monthly mean Water Temp locLake
+                            NumWaterTempLocLake[n] += 1.;                                         // needed bc. of possibility of -9999. (no calculated temperature)
+                        }
+                        if (day_in_month == numberOfDaysInMonth[month] && NumWaterTempLocLake[n] > 0.) {
+                            G_monthlyMeanWaterTempLocLake(n, month) = SumWaterTempLocLake[n] / NumWaterTempLocLake[n];    // monthly output
+                            SumWaterTempLocLake[n] = 0.;
+                            NumWaterTempLocLake[n] = 0.;
+                        } else
+                            G_monthlyMeanWaterTempLocLake(n, month) = -9999.;
+                        // locWetland
+                        if (calcWTempReturns[2] >= 0.) {
+                            SumWaterTempLocWetl[n] += calcWTempReturns[2];                              // for calculation of monthly mean Water Temp locWetland
+                            NumWaterTempLocWetl[n] += 1.;                                         // needed bc. of possibility of -9999. (no calculated temperature)
+                        }
+                        if (day_in_month == numberOfDaysInMonth[month] && NumWaterTempLocWetl[n] > 0.) {
+                            G_monthlyMeanWaterTempLocWetl(n, month) = SumWaterTempLocWetl[n] / NumWaterTempLocWetl[n];    // monthly output
+                            SumWaterTempLocWetl[n] = 0.;
+                            NumWaterTempLocWetl[n] = 0.;
+                        } else
+                            G_monthlyMeanWaterTempLocWetl(n, month) = -9999.;
+                        // gloLake
+                        if (calcWTempReturns[3] >= 0.) {
+                            SumWaterTempGloLake[n] += calcWTempReturns[3];                              // for calculation of monthly mean Water Temp gloLake
+                            NumWaterTempGloLake[n] += 1.;                                         // needed bc. of possibility of -9999. (no calculated temperature)
+                        }
+                        if (day_in_month == numberOfDaysInMonth[month] && NumWaterTempGloLake[n] > 0.) {
+                            G_monthlyMeanWaterTempGloLake(n, month) = SumWaterTempGloLake[n] / NumWaterTempGloLake[n];    // monthly output
+                            SumWaterTempGloLake[n] = 0.;
+                            NumWaterTempGloLake[n] = 0.;
+                        } else
+                            G_monthlyMeanWaterTempGloLake(n, month) = -9999.;
+                        // reservoir
+                        if (calcWTempReturns[4] >= 0.) {
+                            SumWaterTempReservoir[n] += calcWTempReturns[4];                              // for calculation of monthly mean Water Temp reservoir
+                            NumWaterTempReservoir[n] += 1.;                                         // needed bc. of possibility of -9999. (no calculated temperature)
+                        }
+                        if (day_in_month == numberOfDaysInMonth[month] && NumWaterTempReservoir[n] > 0.) {
+                            G_monthlyMeanWaterTempReservoir(n, month) = SumWaterTempReservoir[n] / NumWaterTempReservoir[n];    // monthly output
+                            SumWaterTempReservoir[n] = 0.;
+                            NumWaterTempReservoir[n] = 0.;
+                        } else
+                            G_monthlyMeanWaterTempReservoir(n, month) = -9999.;
+                        // gloWetland
+                        if (calcWTempReturns[5] >= 0.) {
+                            SumWaterTempGloWetl[n] += calcWTempReturns[5];                              // for calculation of monthly mean Water Temp gloWetland
+                            NumWaterTempGloWetl[n] += 1.;                                         // needed bc. of possibility of -9999. (no calculated temperature)
+                        }
+                        if (day_in_month == numberOfDaysInMonth[month] && NumWaterTempGloWetl[n] > 0.) {
+                            G_monthlyMeanWaterTempGloWetl(n, month) = SumWaterTempGloWetl[n] / NumWaterTempGloWetl[n];    // monthly output
+                            SumWaterTempGloWetl[n] = 0.;
+                            NumWaterTempGloWetl[n] = 0.;
+                        } else
+                            G_monthlyMeanWaterTempGloWetl(n, month) = -9999.;
+                    }
+
+                    // water temperature save for next day, if not calculated (-9999.) then reset to air temp
+                    if (calcWTempReturns[0] == -9999.)
+                        if (cwt.tsf.AirTempC < 0.)
+                            G_RiverWTempPreStep[n] = 0.;
+                        else
+                            G_RiverWTempPreStep[n] = cwt.tsf.AirTempC;                     // river
+                    else
+                        G_RiverWTempPreStep[n] = calcWTempReturns[0];
+
+                    if (calcWTempReturns[1] == -9999.)
+                        if (cwt.tsf.AirTempC < 0.)
+                            G_locLakeTempPrevStep[n] = 0.;
+                        else
+                            G_locLakeTempPrevStep[n] = cwt.tsf.AirTempC;                  // locLake
+                    else
+                        G_locLakeTempPrevStep[n] = calcWTempReturns[1];
+
+                    if (calcWTempReturns[2] == -9999.)
+                        if (cwt.tsf.AirTempC < 0.)
+                            G_locWetlTempPrevStep[n] = 0.;
+                        else
+                            G_locWetlTempPrevStep[n] = cwt.tsf.AirTempC;                  // locWetland
+                    else
+                        G_locWetlTempPrevStep[n] = calcWTempReturns[2];
+
+                    if (calcWTempReturns[3] == -9999.)
+                        if (cwt.tsf.AirTempC < 0.)
+                            G_gloLakeTempPrevStep[n] = 0.;
+                        else
+                            G_gloLakeTempPrevStep[n] = cwt.tsf.AirTempC;                  // gloLake
+                    else
+                        G_gloLakeTempPrevStep[n] = calcWTempReturns[3];
+
+                    if (calcWTempReturns[4] == -9999.)
+                        if (cwt.tsf.AirTempC < 0.)
+                            G_reservoirTempPrevStep[n] = 0.;
+                        else
+                            G_reservoirTempPrevStep[n] = cwt.tsf.AirTempC;                // reservoir
+                    else
+                        G_reservoirTempPrevStep[n] = calcWTempReturns[4];
+
+                    if (calcWTempReturns[5] == -9999.)
+                        if (cwt.tsf.AirTempC < 0.)
+                            G_gloWetlandTempPrevStep[n] = 0.;
+                        else
+                            G_gloWetlandTempPrevStep[n] = cwt.tsf.AirTempC;               // gloWetland
+                    else
+                        G_gloWetlandTempPrevStep[n] = calcWTempReturns[5];
+
+                    G_RiverAvailPreStep[n] = transportedVolume;                // cell outflow [km3]
+
+                    cwt.tsf.cellInflows.clear();        // reset of vectors
+                    cwt.tsf.cellInflowsTemp.clear();
+                }
+                // end of water temperature calculation
+                //-------------------------------------
 
                 G_riverInflow[n] = 0.;
-
             }
-            // endif (geo.G_contcell[n]) [only execute for continental cells]
-
-        } // end of loop for gridcells (routing)
-
-    } // end of loop for routing (loop for routing time steps)
+        }
+    }
 
 
     // Calculate total actual Evapotranspiration (land and open water areas); consistent with corrected runoff (2.1f)
@@ -4386,12 +4540,10 @@ void routingClass::routing(const short year, short day, short month, const short
 
                 // first store only land area evapotranspiration
                 dailyTotalAET = dailyWaterBalance.getDailyCellLandAET(n);
-
                 // then sum up land area evapotranspiration and evaporation
                 // from open water areas
                 // all areas in [km2]
                 // resulting data unit: mm * km2
-
 
                 // G_dailyLocLakeEvapo[n] etc. = openWaterPET * area reduction factor -> SWB area already reduced;
                 // therefore, G_loc_lake[n] etc. is used in the following equation:
@@ -4402,12 +4554,13 @@ void routingClass::routing(const short year, short day, short month, const short
                                + (G_dailyResEvapo[n] / 1000000. * G_reservoir_area[n])
                                + (G_dailyGloWetlEvapo[n] / 1000000. * cellArea * G_glo_wetland[n] / 100.);
 
-                if (options.riverEvapoOpt == 1) {
+                //add transported volume to AET in inland sinks to close the water balance
+                if (G_LDD[n] < 0) {
+                    dailyOpenWaterEvap_km3 += G_transportedVolume_for_AET[n];
+                }
 
-                    // dailyOpenWaterEvap now dailyOpenWaterEvap_km3 in km3
+                if (options.riverEvapoOpt == 1) {
                     // POSSIBLE ERROR data unit of dailyOpenWaterEvap: mm * km2 does not correspond to km3 of G_dailyRiverEvapo[n];
-                    //G_dailyRiverEvapo[n] wird oben in km3 berechnet und mit G_riverAreaFrac[n] multipliziert
-                    //dailyOpenWaterEvap += G_dailyRiverEvapo[n] * cellArea * G_riverAreaFrac[n] / 100.;
                     dailyOpenWaterEvap_km3 += G_dailyRiverEvapo[n];        // G_dailyRiverEvapo[n] in km3
                 }
 
@@ -4415,96 +4568,86 @@ void routingClass::routing(const short year, short day, short month, const short
                                      100.)        // dailyTotalAET: mm -> km3
                                     + dailyOpenWaterEvap_km3;
 
-                // monthly output start
+                // monthly output
                 if ((2 == options.grid_store) || (4 == options.grid_store) || (6 == options.grid_store)) {
-                    // FP 2015 // Only continental cells
+                    // Only continental cells
                     if (geo.G_contcell[n]) {
 
                         // AET in mm
-                        G_monthlyCellAET[n][month] += (dailyTotalAET_km3 * 1000000. /
+                        G_monthlyCellAET(n,month) += (dailyTotalAET_km3 * 1000000. /
                                                        ((cellArea * geo.G_contfreq[n] / 100.)));    // [mm]
-                        G_monthlyCellAETWCa[n][month] += dailyTotalAET_km3;    // [km3]
+                        G_monthlyCellAETWCa(n,month) += dailyTotalAET_km3;    // [km3]
 
                         // open water evaporation from surface storages (without rivers)
-                        G_monthlyOpenWaterEvap[n][month] += (dailyOpenWaterEvap_km3 * 1000000. /
+                        G_monthlyOpenWaterEvap(n,month) += (dailyOpenWaterEvap_km3 * 1000000. /
                                                              ((cellArea * geo.G_contfreq[n] / 100.)));    // [mm]
 
                     }
                         // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                     else {
-                        G_monthlyCellAET[n][month] = 0.;
-                        G_monthlyCellAETWCa[n][month] = 0.;
-                        G_monthlyOpenWaterEvap[n][month] = 0.;
+                        G_monthlyCellAET(n,month) = 0.;
+                        G_monthlyCellAETWCa(n,month) = 0.;
+                        G_monthlyOpenWaterEvap(n,month) = 0.;
                     }
                 }
-                // monthly output end
 
-                // daily output option 31 start
+                // daily output option 31
                 if ((3 == options.grid_store) || (4 == options.grid_store)) {
                     if (options.outCellAETDaily) {
-                        // FP 2015-06 // Only continental cells
+                        // Only continental cells
                         if (geo.G_contcell[n]) {
                             // AET in mm
-                            G_daily31CellAET[n][day_in_month - 1] = (dailyTotalAET_km3 * 1000000. /
+                            G_daily31CellAET(n,day_in_month - 1) = (dailyTotalAET_km3 * 1000000. /
                                                                      ((cellArea * geo.G_contfreq[n] / 100.)));
                         }
                             // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                         else {
-                            G_daily31CellAET[n][day_in_month - 1] = 0.;
+                            G_daily31CellAET(n,day_in_month - 1) = 0.;
                         }
-                    } // end if options.outCellAETDaily
+                    }
                     if (options.outCellAETWCaDaily) {
                         if (geo.G_contcell[n]) {
                             // AETWCa in km3
-
-                            G_daily31CellAETWCa[n][day_in_month - 1] += dailyTotalAET_km3;
+                            G_daily31CellAETWCa(n,day_in_month - 1) += dailyTotalAET_km3;
                         }
                             // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                         else {
-                            G_daily31CellAETWCa[n][day_in_month - 1] = 0.;
+                            G_daily31CellAETWCa(n,day_in_month - 1) = 0.;
                         }
-                    } // end if options.outCellAETWCaDaily
+                    }
                 }
-                // daily output option 31 end
 
-                // daily output option 365 start
+                // daily output option 365
                 if ((5 == options.grid_store) || (6 == options.grid_store)) {
 
                     if ((options.outCellAETDaily) || ((options.scoutCellAET) && (2 == options.day_store))) {
-
-                        // FP 2015-06 // Only continental cells
+                        // Only continental cells
                         if (geo.G_contcell[n]) {
                             // AET in mm
-                            G_daily365CellAET[n][day - 1] = (dailyTotalAET_km3 * 1000000. /
+                            G_daily365CellAET(n,day - 1) = (dailyTotalAET_km3 * 1000000. /
                                                              ((cellArea * geo.G_contfreq[n] / 100.)));
                         }
                             // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                         else {
-                            G_daily365CellAET[n][day - 1] = 0.;
+                            G_daily365CellAET(n,day - 1) = 0.;
                         }
 
-                    } // endif options.outCellAETDaily
+                    }
                     if (options.outCellAETWCaDaily) {
 
                         if (geo.G_contcell[n]) {
                             // AET in km3
-                            G_daily365CellAETWCa[n][day - 1] += dailyTotalAET_km3;
+                            G_daily365CellAETWCa(n,day - 1) += dailyTotalAET_km3;
                         }
                             // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                         else {
-                            G_daily365CellAETWCa[n][day - 1] = 0.;
+                            G_daily365CellAETWCa(n,day - 1) = 0.;
                         }
-
-                    } // endif options.outCellAETDaily
+                    }
                 }
-                // daily output option 365 end
-
             }
-            // endif G_toBeCalculated[n]
         }
-        // end loop over grid cells
     }
-    // end of: if (options.grid_store > 1)
 
 
     //calculate total monthly storage per grid cell
@@ -4517,14 +4660,21 @@ void routingClass::routing(const short year, short day, short month, const short
                 //output for reservoir and storages start
                 if (options.resOpt == 1) {
                     if (G_reservoir_area[n] > 0.) {
-                        G_monthlyResInflow[n][month] += G_daily_res_in[n]; // total inflow in month [km3/day] -> [km3/month]
-                        G_monthlyResOutflow[n][month] += G_daily_res_out[n]; // total outflow in month [km3/day] -> [km3/month]
+                        G_monthlyResInflow(n,month) += G_daily_res_in[n]; // total inflow in month [km3/day] -> [km3/month]
+                        G_monthlyResOutflow(n,month) += G_daily_res_out[n]; // total outflow in month [km3/day] -> [km3/month]
                     } else {
-                        G_monthlyResInflow[n][month] = 0.; // no reservoir area --> no Inflow (anyhow, output is not yet implemented)
-                        G_monthlyResOutflow[n][month] = 0.; // no reservoir area --> no Outflow
+                        G_monthlyResInflow(n,month) = 0.; // no reservoir area --> no Inflow (anyhow, output is not yet implemented)
+                        G_monthlyResOutflow(n,month) = 0.; // no reservoir area --> no Outflow
                     }
                 }
-                // endif options.resOpt
+
+                // Only for runs which consider glaciers
+                if (options.glacierOpt == 1) {
+                    if (options.grid_store_TypeForStorages == 0)  // values at end of time step
+                        G_monthlyGlacierStorage(n,month) = G_glacierStorage[n];
+                    else  // mean values of time step
+                        G_monthlyGlacierStorage(n,month) += G_glacierStorage[n];
+                }
 
                 // output if
                 // G_monthlyResStorage, G_monthlyLocLakeStorage, G_monthlyGloLakeStorage, G_monthlyRiverStorage,
@@ -4532,33 +4682,30 @@ void routingClass::routing(const short year, short day, short month, const short
                 if (options.grid_store_TypeForStorages == 0) {
                     if (options.resOpt == 1) {
 
-                        G_monthlySurfStor[n][month] =
+                        G_monthlySurfStor(n,month) =
                                        (G_locLakeStorage[n]
                                         + G_locWetlStorage[n]
                                         + G_gloLakeStorage[n]
                                         + G_gloWetlStorage[n]
                                         + G_riverStorage[n]
                                         + G_gloResStorage[n]);
-                        // / (cellArea * (geo.G_contfreq[n] / 100.)) * 1000000.);
-                    } // endif options.resOpt
+                    }
                     else {
                         // total surface water storage in grid cell (lakes/wetlands/rivers) // [km3]
-                        G_monthlySurfStor[n][month] =
+                        G_monthlySurfStor(n,month) =
                                        (G_locLakeStorage[n]
                                         + G_locWetlStorage[n]
                                         + G_gloLakeStorage[n]
                                         + G_gloWetlStorage[n]
                                         + G_riverStorage[n]);
-                        // / (cellArea * (geo.G_contfreq[n] / 100.)) * 1000000. );
                     }
                 }
-                // endif (options.grid_store_TypeForStorages == 0)
 
-                //FP20161213N001 Probably double-counting here, as same procedure already present in loop over time steps
+                // Probably double-counting here, as same procedure already present in loop over time steps
                 // if mean monthly surface storage value is of interest
                 if (options.grid_store_TypeForStorages == 1) {
                     if ((options.antNatOpt == 0) && (options.resOpt == 1)) {
-                        G_monthlySurfStor[n][month] +=
+                        G_monthlySurfStor(n,month) +=
                                        (G_locLakeStorage[n]
                                         + G_locWetlStorage[n]
                                         + G_gloLakeStorage[n]
@@ -4567,78 +4714,68 @@ void routingClass::routing(const short year, short day, short month, const short
                                         + G_gloResStorage[n]);
 
 
-                    } else { //if (options.resOpt == 0){ HMS 2017-06-08 obsolete as either it is ant + resOpt == 1 or any other.
+                    } else {
                         // mean value of total surface water storage in grid cell (lakes/wetlands/rivers) [km3] (converted to mm for optional output in a later step)
-                            G_monthlySurfStor[n][month] +=
+                            G_monthlySurfStor(n,month) +=
                                            (G_locLakeStorage[n]
                                             + G_locWetlStorage[n]
                                             + G_gloLakeStorage[n]
                                             + G_gloWetlStorage[n]
                                             + G_riverStorage[n]);
-                        // / (cellArea * (geo.G_contfreq[n] / 100.)) * 1000000. / timeStepsPerDay );
                     }
                 }
-                // endif (options.grid_store_TypeForStorages == 1)
-//FP20161213N001 Item 2 start
                 //output for natural lakes and wetlands
                 if (options.grid_store_TypeForStorages == 0) {
-                    G_monthlyLocLakeStorage[n][month] = G_locLakeStorage[n];
-                    G_monthlyGloLakeStorage[n][month] = G_gloLakeStorage[n];
-                    G_monthlyRiverStorage[n][month] = G_riverStorage[n];
-                    G_monthlyLocWetlStorage[n][month] = G_locWetlStorage[n];
-                    G_monthlyGloWetlStorage[n][month] = G_gloWetlStorage[n];
-                    G_monthlyGwStorage[n][month] = G_groundwaterStorage[n];
+                    G_monthlyLocLakeStorage(n,month) = G_locLakeStorage[n];
+                    G_monthlyGloLakeStorage(n,month) = G_gloLakeStorage[n];
+                    G_monthlyRiverStorage(n,month) = G_riverStorage[n];
+                    G_monthlyLocWetlStorage(n,month) = G_locWetlStorage[n];
+                    G_monthlyGloWetlStorage(n,month) = G_gloWetlStorage[n];
+                    G_monthlyGwStorage(n,month) = G_groundwaterStorage[n];
 
                     if ((options.antNatOpt == 0) && (options.resOpt == 1))
-                        G_monthlyResStorage[n][month] = G_gloResStorage[n];
+                        G_monthlyResStorage(n,month) = G_gloResStorage[n];
 
                 } else if (options.grid_store_TypeForStorages == 1) {
-                    G_monthlyLocLakeStorage[n][month] += G_locLakeStorage[n];
-                    G_monthlyGloLakeStorage[n][month] += G_gloLakeStorage[n];
-                    G_monthlyRiverStorage[n][month] += G_riverStorage[n];
-                    G_monthlyLocWetlStorage[n][month] += G_locWetlStorage[n];
-                    G_monthlyGloWetlStorage[n][month] += G_gloWetlStorage[n];
-                    G_monthlyGwStorage[n][month] += G_groundwaterStorage[n];
+                    G_monthlyLocLakeStorage(n,month) += G_locLakeStorage[n];
+                    G_monthlyGloLakeStorage(n,month) += G_gloLakeStorage[n];
+                    G_monthlyRiverStorage(n,month) += G_riverStorage[n];
+                    G_monthlyLocWetlStorage(n,month) += G_locWetlStorage[n];
+                    G_monthlyGloWetlStorage(n,month) += G_gloWetlStorage[n];
+                    G_monthlyGwStorage(n,month) += G_groundwaterStorage[n];
 
                     if ((options.antNatOpt == 0) && (options.resOpt == 1))
-                        G_monthlyResStorage[n][month] += G_gloResStorage[n];
+                        G_monthlyResStorage(n,month) += G_gloResStorage[n];
                 }
 
 //FP20161213N001 Item 2 end
             }
-            // end if G_toBeCalculated[n]
         }
-        // end loop over grid cells
     }
-    // endif option
 
 
-    if ((3 == options.grid_store) || (4 == options.grid_store)) { // .31 gw storage output calculation in km3
+    if ((3 == options.grid_store) || (4 == options.grid_store)) {
+        // .31 gw storage output calculation in km3
         // calculation G_monthlyGwStorage formerly in daily.cpp, has to be calculated after NUg is subtracted
         for (int n = 0; n < ng; n++) {
             if (0 != G_toBeCalculated[n]) {
                 if (options.outGWStorageDaily || options.outSingleStoragesDaily)
-                    G_daily31GwStor[n][day_in_month - 1] += G_groundwaterStorage[n];
-            } // end if G_toBeCalculated[n]
+                    G_daily31GwStor(n,day_in_month - 1) += G_groundwaterStorage[n];
+            }
         }
-        // end loop over grid cells
     }
-    // endif option
 
 
-    if ((5 == options.grid_store) || (6 == options.grid_store)) {  // .365 gw storage output - calculation in km3
+    if ((5 == options.grid_store) || (6 == options.grid_store)) {
+        // .365 gw storage output - calculation in km3
         for (int n = 0; n < ng; n++) {
             if (0 != G_toBeCalculated[n]) {
                 if ((options.outGWStorageDaily || options.outSingleStoragesDaily) ||
                     ((options.scoutGwStor) && (2 == options.day_store)))
-                    G_daily365GwStor[n][day - 1] = G_groundwaterStorage[n];
+                    G_daily365GwStor(n,day - 1) = G_groundwaterStorage[n];
             }
-            // end if G_toBeCalculated[n]
         }
-        // end loop over grid cells
     }
-    // endif option
-
 
     // daily 31 storage calculation
     if (((3 == options.grid_store) || (4 == options.grid_store)) &&
@@ -4647,27 +4784,26 @@ void routingClass::routing(const short year, short day, short month, const short
             if (0 != G_toBeCalculated[n]) {
 
                 if (options.outSingleStoragesDaily) {
-                    G_daily31LocLakeStor[n][day_in_month - 1] = G_locLakeStorage[n];
-                    G_daily31LocWetlStor[n][day_in_month - 1] = G_locWetlStorage[n];
-                    G_daily31GloLakeStor[n][day_in_month - 1] = G_gloLakeStorage[n];
-                    G_daily31GloWetlStor[n][day_in_month - 1] = G_gloWetlStorage[n];
-                    G_daily31RiverStor[n][day_in_month - 1] = G_riverStorage[n];
+                    G_daily31LocLakeStor(n,day_in_month - 1) = G_locLakeStorage[n];
+                    G_daily31LocWetlStor(n,day_in_month - 1) = G_locWetlStorage[n];
+                    G_daily31GloLakeStor(n,day_in_month - 1) = G_gloLakeStorage[n];
+                    G_daily31GloWetlStor(n,day_in_month - 1) = G_gloWetlStorage[n];
+                    G_daily31RiverStor(n,day_in_month - 1) = G_riverStorage[n];
                     if (options.resOpt == 1)
-                        G_daily31ResStor[n][day_in_month - 1] = G_gloResStorage[n];
+                        G_daily31ResStor(n,day_in_month - 1) = G_gloResStorage[n];
                 }
-                // endif options.outSurfStorDaily
 
                 // daily total water storage output (calculate here after subtracting water use from groundwater)
                 // calculate daily 31 storage per grid cell
                 // here: get from vertical water balance (first part)
                 // in km³
                 double storage_daily31 = 0.;
-                storage_daily31 = dailyWaterBalance.G_daily31CanopyStorage[n][day_in_month - 1] // [km3]
-                                  + dailyWaterBalance.G_daily31SnowStorage[n][day_in_month - 1]
-                                  + dailyWaterBalance.G_daily31SoilStorage[n][day_in_month - 1];
+                storage_daily31 = dailyWaterBalance.G_daily31CanopyStorage(n,day_in_month - 1) // [km3]
+                                  + dailyWaterBalance.G_daily31SnowStorage(n,day_in_month - 1)
+                                  + dailyWaterBalance.G_daily31SoilStorage(n,day_in_month - 1);
 
                 // here: add the storages from routing (and later groundwater) (second part)
-                G_daily31TotalWaterInStorages_km3[n][day_in_month - 1] =
+                G_daily31TotalWaterInStorages_km3(n,day_in_month - 1) =
                                storage_daily31
                                + G_locLakeStorage[n]
                                + G_locWetlStorage[n]
@@ -4676,51 +4812,42 @@ void routingClass::routing(const short year, short day, short month, const short
                                + G_riverStorage[n]
                                + G_groundwaterStorage[n];
                 if (options.resOpt) {
-                    G_daily31TotalWaterInStorages_km3[n][day_in_month - 1] += G_gloResStorage[n];
+                    G_daily31TotalWaterInStorages_km3(n,day_in_month - 1) += G_gloResStorage[n];
                 }
 
-                // FP 2015-06 // Only continental cells
+                // Only continental cells
                 if (geo.G_contcell[n]) {
                     // convert total storage from km3 to mm
-                    G_daily31TotalWaterInStorages_mm[n][day_in_month - 1] =
-                                   G_daily31TotalWaterInStorages_km3[n][day_in_month - 1]
+                    G_daily31TotalWaterInStorages_mm(n,day_in_month - 1) =
+                                   G_daily31TotalWaterInStorages_km3(n,day_in_month - 1)
                                    / (geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) * 1000000.;
                 }
                     // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                 else {
-                    G_daily31TotalWaterInStorages_mm[n][day_in_month - 1] = 0.;
+                    G_daily31TotalWaterInStorages_mm(n,day_in_month - 1) = 0.;
                 }
 
                 // daily surface water storage km3
                 if (options.outSurfStorDaily) {
                     if (options.resOpt == 1)
-                        G_daily31SurfStor[n][day_in_month - 1] +=
+                        G_daily31SurfStor(n,day_in_month - 1) +=
                                        (G_locLakeStorage[n]
                                         + G_locWetlStorage[n]
                                         + G_gloLakeStorage[n]
                                         + G_gloWetlStorage[n]
                                         + G_riverStorage[n]
                                         + G_gloResStorage[n]);
-                        // 	/ (cellArea * (geo.G_contfreq[n] / 100.)) * 1000000. / timeStepsPerDay );
                     else
-                        G_daily31SurfStor[n][day_in_month - 1] += // [km3]
+                        G_daily31SurfStor(n,day_in_month - 1) += // [km3]
                                        (G_locLakeStorage[n]
                                         + G_locWetlStorage[n]
                                         + G_gloLakeStorage[n]
                                         + G_gloWetlStorage[n]
                                         + G_riverStorage[n]);
-                    //	/ (cellArea * (geo.G_contfreq[n] / 100.)) * 1000000. / timeStepsPerDay );
                 }
-                // endif options.outSurfStorDaily
-
             }
-            // endif G_toBeCalculated[n]
-
         }
-        // end loop over grid cells
-
     }
-    // endif option
 
 
     if (((5 == options.grid_store) || (6 == options.grid_store)) &&
@@ -4730,19 +4857,23 @@ void routingClass::routing(const short year, short day, short month, const short
             if (0 != G_toBeCalculated[n]) {
 
                 if ((options.outSingleStoragesDaily) || ((options.scoutLocLake) && (2 == options.day_store)))
-                    G_daily365LocLakeStor[n][day - 1] = G_locLakeStorage[n];
+                    G_daily365LocLakeStor(n,day - 1) = G_locLakeStorage[n];
                 if ((options.outSingleStoragesDaily) || ((options.scoutLocWet) && (2 == options.day_store)))
-                    G_daily365LocWetlStor[n][day - 1] = G_locWetlStorage[n];
+                    G_daily365LocWetlStor(n,day - 1) = G_locWetlStorage[n];
                 if ((options.outSingleStoragesDaily) || ((options.scoutGloLake) && (2 == options.day_store)))
-                    G_daily365GloLakeStor[n][day - 1] = G_gloLakeStorage[n];
+                    G_daily365GloLakeStor(n,day - 1) = G_gloLakeStorage[n];
                 if ((options.outSingleStoragesDaily) || ((options.scoutGloWet) && (2 == options.day_store)))
-                    G_daily365GloWetlStor[n][day - 1] = G_gloWetlStorage[n];
+                    G_daily365GloWetlStor(n,day - 1) = G_gloWetlStorage[n];
                 if ((options.outSingleStoragesDaily) || ((options.scoutRiver) && (2 == options.day_store)))
-                    G_daily365RiverStor[n][day - 1] = G_riverStorage[n];
+                    G_daily365RiverStor(n,day - 1) = G_riverStorage[n];
                 if ((options.outSingleStoragesDaily) || ((options.scoutReservoir) && (2 == options.day_store))) {
                     if (options.resOpt == 1)
-                        G_daily365ResStor[n][day - 1] = G_gloResStorage[n];
+                        G_daily365ResStor(n,day - 1) = G_gloResStorage[n];
                 }
+                if (((options.outSingleStoragesDaily) && (options.glacierOpt == 1)) || ((options.outGlacierStorageDaily) && (options.glacierOpt == 1)))
+                    G_daily365GlacierStorage(n,day - 1) = G_glacierStorage[n];
+                if ((options.outGlacierStorageDaily_mm) && (options.glacierOpt == 1))
+                    G_daily365GlacierStorage_mm(n,day - 1) = G_glacierStorage[n] / (geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) * 1000000.0;
 
                 // daily total water storage output (calculate here after subtracting water use from groundwater)
                 // calculate daily 365 storage per grid cell
@@ -4750,12 +4881,12 @@ void routingClass::routing(const short year, short day, short month, const short
                 // in km³
 
                 double storage_daily365 = 0.;
-                storage_daily365 = dailyWaterBalance.G_daily365CanopyStorage[n][day - 1] // [km3]
-                                   + dailyWaterBalance.G_daily365SnowStorage[n][day - 1]
-                                   + dailyWaterBalance.G_daily365SoilStorage[n][day - 1];
+                storage_daily365 = dailyWaterBalance.G_daily365CanopyStorage(n,day - 1) // [km3]
+                                   + dailyWaterBalance.G_daily365SnowStorage(n,day - 1)
+                                   + dailyWaterBalance.G_daily365SoilStorage(n,day - 1);
 
                 // here: add the storages from routing (and later groundwater) (second part)
-                G_daily365TotalWaterInStorages_km3[n][day - 1] =
+                G_daily365TotalWaterInStorages_km3(n,day - 1) =
                                storage_daily365
                                + G_locLakeStorage[n]
                                + G_locWetlStorage[n]
@@ -4764,60 +4895,54 @@ void routingClass::routing(const short year, short day, short month, const short
                                + G_riverStorage[n]
                                + G_groundwaterStorage[n];
                 if (options.resOpt || (((options.scoutTWSkm3) || (options.scoutTWSmm)) && (2 == options.day_store)))
-                    G_daily365TotalWaterInStorages_km3[n][day - 1] += G_gloResStorage[n];
+                    G_daily365TotalWaterInStorages_km3(n,day - 1) += G_gloResStorage[n];
+                if (options.glacierOpt == 1)
+                    G_daily365TotalWaterInStorages_km3(n,day - 1) += G_daily365GlacierStorage(n,day - 1);
 
 
                 if (options.outTotalWaterInStoragesDaily_mm || options.scoutTWSmm) {
-                    // FP 2015-06 // Only continental cells
+                    // Only continental cells
                     if (geo.G_contcell[n]) {
                         // convert total storages from km3 to mm
-                        G_daily365TotalWaterInStorages_mm[n][day - 1] =
-                                       G_daily365TotalWaterInStorages_km3[n][day - 1]
+                        G_daily365TotalWaterInStorages_mm(n,day - 1) =
+                                       G_daily365TotalWaterInStorages_km3(n,day - 1)
                                        / (geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) * 1000000.;
                     }
                         // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                     else {
-                        G_daily365TotalWaterInStorages_mm[n][day - 1] = 0.;
+                        G_daily365TotalWaterInStorages_mm(n,day - 1) = 0.;
                     }
                 }
-                // endif options
 
                 // daily surface water storage km3
                 if ((options.outSurfStorDaily) || ((options.scoutSurfaceStor) && (2 == options.day_store))) {
                     if (options.resOpt == 1)
-                        G_daily365SurfStor[n][day - 1] =
+                        G_daily365SurfStor(n,day - 1) =
                                        (G_locLakeStorage[n]
                                         + G_locWetlStorage[n]
                                         + G_gloLakeStorage[n]
                                         + G_gloWetlStorage[n]
                                         + G_riverStorage[n]
                                         + G_gloResStorage[n]);
-                        // / (cellArea * (geo.G_contfreq[n] / 100.)) * 1000000. / timeStepsPerDay );
 
                     else
-                        G_daily365SurfStor[n][day - 1] = // [km3]
+                        G_daily365SurfStor(n,day - 1) = // [km3]
                                        (G_locLakeStorage[n]
                                         + G_locWetlStorage[n]
                                         + G_gloLakeStorage[n]
                                         + G_gloWetlStorage[n]
                                         + G_riverStorage[n]);
-                    // / (cellArea * (geo.G_contfreq[n] / 100.)) * 1000000. / timeStepsPerDay );
                 }
-                // endif options
-
             }
-            // endif (0 != G_toBeCalculated[n])
         }
-        // end loop over grid cells
     }
-    // endif option
 
     //HMS startend TWS output
     if (options.outTotalWaterInStoragesStartEndDaily_km3) {
         for (int n = 0; n < ng; n++) {
             if (0 != G_toBeCalculated[n]) {
                 if (day == 1) { // calculate for first day in year
-                    G_startendTotalWaterInStorages_km3[n][0] =
+                    G_startendTotalWaterInStorages_km3(n,0) =
                                    dailyWaterBalance.G_canopyWaterContent[n] * geo.areaOfCellByArrayPos(n) / 1000000.0 *
                                    G_landAreaFrac[n] / 100.0 // [km3]
                                    + dailyWaterBalance.G_snow[n] * geo.areaOfCellByArrayPos(n) / 1000000.0 *
@@ -4831,10 +4956,12 @@ void routingClass::routing(const short year, short day, short month, const short
                                    + G_riverStorage[n]
                                    + G_groundwaterStorage[n];
                     if (options.resOpt)
-                        G_startendTotalWaterInStorages_km3[n][0] += G_gloResStorage[n];
+                        G_startendTotalWaterInStorages_km3(n,0) += G_gloResStorage[n];
+                    if (options.glacierOpt)
+                        G_startendTotalWaterInStorages_km3(n,0) += G_glacierStorage[n];
                 }
                 if (day == 365) { // calculate for last day in year
-                    G_startendTotalWaterInStorages_km3[n][1] =
+                    G_startendTotalWaterInStorages_km3(n,1) =
                                    dailyWaterBalance.G_canopyWaterContent[n] * geo.areaOfCellByArrayPos(n) / 1000000.0 *
                                    G_landAreaFrac[n] / 100.0 // [km3]
                                    + dailyWaterBalance.G_snow[n] * geo.areaOfCellByArrayPos(n) / 1000000.0 *
@@ -4848,7 +4975,9 @@ void routingClass::routing(const short year, short day, short month, const short
                                    + G_riverStorage[n]
                                    + G_groundwaterStorage[n];
                     if (options.resOpt)
-                        G_startendTotalWaterInStorages_km3[n][1] += G_gloResStorage[n];
+                        G_startendTotalWaterInStorages_km3(n,1) += G_gloResStorage[n];
+                    if (options.glacierOpt)
+                        G_startendTotalWaterInStorages_km3(n,1) += G_glacierStorage[n];
                 }
             }
         }
@@ -4857,55 +4986,79 @@ void routingClass::routing(const short year, short day, short month, const short
 
     if (options.day_store == 1) {
         for (short b = 0; b < nSpecBasins; b++) {
-            dailyLocLakeStorage[b][day - 1] = getActualStorageRatio(cbasin.cellNum[b],
+            dailyLocLakeStorage(b,day - 1) = getActualStorageRatio(cbasin.cellNum[b],
                                                                     1);  // ATTENTION: method using only cell-specific calibration parameter P_LAK_D  // FP
-            dailyLocWetlStorage[b][day - 1] = getActualStorageRatio(cbasin.cellNum[b], 2);
-            dailyGloLakeStorage[b][day - 1] = getActualStorageRatio(cbasin.cellNum[b],
+            dailyLocWetlStorage(b,day - 1) = getActualStorageRatio(cbasin.cellNum[b], 2);
+            dailyGloLakeStorage(b,day - 1) = getActualStorageRatio(cbasin.cellNum[b],
                                                                     3);  // ATTENTION: method using only cell-specific calibration parameter P_LAK_D  // FP
-            dailyGloWetlStorage[b][day - 1] = getActualStorageRatio(cbasin.cellNum[b], 4);
+            dailyGloWetlStorage(b,day - 1) = getActualStorageRatio(cbasin.cellNum[b], 4);
             if (options.resOpt == 1)
-                dailyResStorage[b][day - 1] = getActualStorageRatio(cbasin.cellNum[b], 5);
+                dailyResStorage(b,day - 1) = getActualStorageRatio(cbasin.cellNum[b], 5);
         }
     }
-    // endif option (options.day_store == 1)
 
 
+    // AEMS: Store daily values in wghmStateFile:
+    for (int n = 0; n < ng; n++) {
+        //HMS I don't understand why .locallake(day_in_month-1) is written, and not (0) - the wghmState.cell-Array is in my eyes not multidimensional? Check with Maike / Annette needed.
+        //
+        cellArea = geo.areaOfCellByArrayPos(n);
+        wghmState.cell(n).locallake(day_in_month - 1) =
+                       G_locLakeStorage[n] / ((cellArea * (geo.G_contfreq[n] / 100.)) / 1000000.);
+        wghmState.cell(n).localwetland(day_in_month - 1) =
+                       G_locWetlStorage[n] / ((cellArea * (geo.G_contfreq[n] / 100.)) / 1000000.);
+        wghmState.cell(n).globallake(day_in_month - 1) =
+                       G_gloLakeStorage[n] / ((cellArea * (geo.G_contfreq[n] / 100.)) / 1000000.);
+        wghmState.cell(n).globalwetland(day_in_month - 1) =
+                       G_gloWetlStorage[n] / ((cellArea * (geo.G_contfreq[n] / 100.)) / 1000000.);
+        wghmState.cell(n).reservoir(day_in_month - 1) =
+                       G_gloResStorage[n] / ((cellArea * (geo.G_contfreq[n] / 100.)) / 1000000.);
+        wghmState.cell(n).river(day_in_month - 1) =
+                       G_riverStorage[n] / ((cellArea * (geo.G_contfreq[n] / 100.)) / 1000000.);
+        wghmState.cell(n).groundwater(day_in_month - 1) =
+                       G_groundwaterStorage[n] / ((cellArea * (geo.G_contfreq[n] / 100.)) / 1000000.);
+    }
+    // AEMS: store G_totalUnsatisfiedUse of last day of a month in additionalOutputInputFile
+    if (day == last_day_in_month + 1) // for the last day of a month
+    {
+        for (int n = 0; n < ng; n++) {
+            additionalOutIn.additionalOutputInput(n, 3) = G_totalUnsatisfiedUse[n];
+            additionalOutIn.additionalOutputInput(n, 4) = G_UnsatisfiedUsePrevYear[n];
+            additionalOutIn.additionalOutputInput(n, 50) = G_reducedReturnFlowPrevYear[n];
+            additionalOutIn.additionalOutputInput(n, 51) = G_unsatisfiedNAsFromIrrigPrevYear[n];
+            additionalOutIn.additionalOutputInput(n, 52) = G_unsatisfiedNAsFromOtherSectorsPrevYear[n];
+
+        }
+    }
     // Computation of SWB and land area fractions for the next time step
     for (int n = 0; n < ng; n++) {
 
-        //if ((1 == options.fractionalRoutingOpt) || (options.aridareaOpt == 1) || (options.outFswb == 1)){
-
         // a second cell is allowed to satisfy the remaining demand
 
-        // HMS 2013-11-22 multiply actual size of each swb with specific area in % and divide through continental area in % to get actual fraction of surface water bodies for the next time step
+        // multiply actual size of each swb with specific area in % and divide through continental area in % to get actual fraction of surface water bodies for the next time step
         // G_lake_area and G_reservoir_area are in km2 and have therefore considered differently to get the fraction of the continental area of those
         // to avoid numerical problems (sometimes the area in % gets nan), each swb type is summed up seperately.
         // for arid and for humid cells
 
-
-        // FP20161018N002 Reservoir operation start years
+        // Reservoir operation start years
         // Initial values are now assigned in routing.init
         if ((G_loc_lake[n] > 0.) && (G_locLakeAreaReductionFactor[n] > 0.)) {
             G_fLocLake[n] = (G_locLakeAreaReductionFactor[n] * G_loc_lake[n] / 100.);
         } else {
             G_fLocLake[n] = 0.; // to prevent that a single fraction values of a previous grid cell is used (if the conditions of the if clause is not true), the fractions will be 0 if the if clause is not true.
         }
-
+        if (day == last_day_in_month + 1) {
+            additionalOutIn.additionalOutputInput(n, 45) = G_fLocLake[n];
+        }
         if ((G_loc_wetland[n] > 0.) && (G_locWetlAreaReductionFactor[n] > 0.)) {
             G_fLocWet[n] = (G_locWetlAreaReductionFactor[n] * G_loc_wetland[n] / 100.);
         } else {
             G_fLocWet[n] = 0.;
         }
 
-        //if (((double)G_lake_area[n] > 0.) && (gloLakeEvapoReductionFactor > 0.))
-        //    G_fGloLakeOutflowCell[n] = (gloLakeEvapoReductionFactor * ((double)G_lake_area[n] / (geo.areaOfCellByArrayPos(n) ))); // can reach values > 1 due to relocalization into outflow cell.
-        //else
-        //    G_fGloLakeOutflowCell[n] = 0.;
-
-        //if (((double)G_reservoir_area[n] > 0.) && (gloResEvapoReductionFactor > 0.))
-        //    G_fGloResOutflowCell[n] = (gloResEvapoReductionFactor * ((double)G_reservoir_area[n] / (geo.areaOfCellByArrayPos(n) ))); // can reach values > 1 due to relocalization into outflow cell.
-        //else
-        //    G_fGloResOutflowCell[n] = 0.;
+        if (day == last_day_in_month + 1) {
+            additionalOutIn.additionalOutputInput(n, 47) = G_fLocWet[n];
+        }
 
         if ((G_glo_wetland[n] > 0.) && (G_gloWetlAreaReductionFactor[n] > 0.)) {
             G_fGloWet[n] = (G_gloWetlAreaReductionFactor[n] * G_glo_wetland[n] / 100.);
@@ -4913,16 +5066,18 @@ void routingClass::routing(const short year, short day, short month, const short
             G_fGloWet[n] = 0.;
         }
 
-        // FP20161018N002 Reservoir operation start years
+        if (day == last_day_in_month + 1) {
+            additionalOutIn.additionalOutputInput(n, 46) = G_fGloWet[n];
+        }
+
+        // Reservoir operation start years
         // calculate changes in G_fswb (initialization is already done in routing.init)
 
         // Old fraction from previously calculated time step
         G_fswbLandAreaFrac[n] = G_fswbLandAreaFracNextTimestep[n];  // In first time step identical values from routing.init
         // New current fraction
         G_fswbLandAreaFracNextTimestep[n] = G_fLocLake[n] + G_fLocWet[n] + G_fGloWet[n];
-        G_fswbLandAreaFrac_ChangePct[n] = G_fswbLandAreaFracNextTimestep[n] * 100. - G_fswbLandAreaFrac[n] *
-                                                                                     100.; // G_fwsb is in fraction, G_landAreaFrac (where G_fswbChange is calculated) is in %
-
+        G_fswbLandAreaFrac_ChangePct[n] = G_fswbLandAreaFracNextTimestep[n] * 100. - G_fswbLandAreaFrac[n] * 100.0;
 
         // adapt changes in landareafrac due to changes in river area fraction
         if (options.riverEvapoOpt == 1) {
@@ -4931,41 +5086,34 @@ void routingClass::routing(const short year, short day, short month, const short
                                     G_fGloLake[n]; //river area fraction can not be larger than "available" land area fraction
 
             // FP comment: inland sink?? and 100% glo lake
-            if (((G_lake_area[n] > 0.) || (G_reservoir_area[n] > 0.)) &&
-                (G_fGloLake[n] == 1.)) { // for outlet cells containing 100% global lakes, no river evapo at all
+            if (((G_lake_area[n] > 0.) || (G_reservoir_area[n] > 0.)) && (G_fGloLake[n] == 1.)) {
+                // for outlet cells containing 100% global lakes, no river evapo at all
                 G_riverAreaFracNextTimestep_Frac[n] = 0.;
                 G_riverAreaFrac_ChangeFrac[n] = 0.;
                 G_riverAreaReductionFactor[n] = 0.;
                 G_dailyRiverEvapo[n] = 0.;
-            } else { // no inland sink and no 100% glo lake
-                //if (G_riverAreaFracChange[n] <= G_maxRiverAreaFrac[n]) //river fraction can reach max value
-                if (G_riverAreaFracNextTimestep_Frac[n] <= G_maxRiverAreaFrac[n]) {//river fraction can reach max value
+            } else {
+                // no inland sink and no 100% glo lake
+                if (G_riverAreaFracNextTimestep_Frac[n] <= G_maxRiverAreaFrac[n]) {
 
+                    //river fraction can reach max value
                     if (G_fswbLandAreaFracNextTimestep[n] >
                         (G_maxRiverAreaFrac[n] - G_riverAreaFracNextTimestep_Frac[n])) {
-                        //if (G_riverAreaFracChange[n] > (G_maxRiverAreaFrac[n] - G_fswbLandAreaFracNextTimestep[n])) // not enough land fraction is available for river fraction, thus reduce swb fraction
 
                         fswbFracCorr = (G_maxRiverAreaFrac[n] - G_riverAreaFracNextTimestep_Frac[n]) /
                                        G_fswbLandAreaFracNextTimestep[n];
-                        //fswbFracCorr = 1 - (G_fswbLandAreaFracNextTimestep[n] + G_riverAreaFracChange[n]) / G_maxRiverAreaFrac[n];
                         G_locLakeAreaReductionFactor[n] *= fswbFracCorr;
                         G_locWetlAreaReductionFactor[n] *= fswbFracCorr;
                         G_gloWetlAreaReductionFactor[n] *= fswbFracCorr;
 
-                        //fLocLak = G_fLocLake[n] + G_fLocLake[n] * fswbFracCorr;
-                        //fLocWet = G_fLocWet[n] + G_fLocWet[n] * fswbFracCorr;
-                        //fGloWet = G_fGloWet[n] + G_fGloWet[n] * fswbFracCorr;
                         if ((G_fLocLake[n] > 0.) && (G_locLakeAreaReductionFactor[n] > 0.)) {
-                            //G_locLakeAreaReductionFactor[n] = G_locLakeAreaReductionFactor[n] * G_fLocLake[n] / ((double)G_loc_lake[n]/100.); // adapt areareductionfactor
                             G_fLocLake[n] = (G_locLakeAreaReductionFactor[n] * G_loc_lake[n] /
                                              100.); // and finalize swb fraction
                         } else {
                             G_locLakeAreaReductionFactor[n] = 0.;
                             G_fLocLake[n] = 0.;
                         }
-
                         if ((G_fLocWet[n] > 0.) && (G_locWetlAreaReductionFactor[n] > 0.)) {
-                            //G_locWetlAreaReductionFactor[n] = G_locWetlAreaReductionFactor[n] * G_fLocWet[n] / ((double)G_loc_wetland[n]/100.); // adapt areareductionfactor
                             G_fLocWet[n] = (G_locWetlAreaReductionFactor[n] * G_loc_wetland[n] /
                                             100.); // and finalize swb fraction
                         } else {
@@ -4974,7 +5122,6 @@ void routingClass::routing(const short year, short day, short month, const short
                         }
 
                         if ((G_fGloWet[n] > 0.) && (G_gloWetlAreaReductionFactor[n] > 0.)) {
-                            //G_gloWetlAreaReductionFactor[n] = G_gloWetlAreaReductionFactor[n] * G_fGloWet[n] / ((double)G_glo_wetland[n]/100.); // adapt areareductionfactor
                             G_fGloWet[n] = (G_gloWetlAreaReductionFactor[n] * G_glo_wetland[n] /
                                             100.); // and finalize swb fraction
                         } else {
@@ -4983,12 +5130,9 @@ void routingClass::routing(const short year, short day, short month, const short
                         }
 
                     }
-                    // endif (G_fswbLandAreaFracNextTimestep[n] > (G_maxRiverAreaFrac[n] - G_riverAreaFracNextTimestep[n]))
-
                 }
-                    // endif //river fraction can reach max value
-                else { //river fraction cannot reach max value, thus has to be limited as well as river evaporation
-                    //  cout << "riverfrac cannot reach max at n: " << n << " and day: " << day << " glolak: " << G_glo_lake[n] << " riverfrac: " << G_riverAreaFrac[n] << endl;
+                else {
+                    //river fraction cannot reach max value, thus has to be limited as well as river evaporation
                     riverAreaFracDeficit = G_riverAreaFracNextTimestep_Frac[n] -
                                            G_maxRiverAreaFrac[n]; //calculate missing fraction
                     G_riverAreaFrac_ChangeFrac[n] -= riverAreaFracDeficit; //reduce fraction change
@@ -5002,76 +5146,33 @@ void routingClass::routing(const short year, short day, short month, const short
                 }
 
             }
-            // endelse (no inland sink and no 100% glo lake)
-            //G_dailyRiverEvapo[n] = (double)dailyWaterBalance.G_openWaterPET[n] * G_riverAreaFrac[n] / 100.; // Evaporation from rivers in mm of cell area
-            //dailyRiverEvapo = G_dailyRiverEvapo[n] * cellArea *(((double)geo.G_landfreq[n] + (double)geo.G_fwaterfreq[n]) / 100. / 1000000.); //evaporation from rivers in km3
 
             G_fswbLandAreaFracNextTimestep[n] = G_fLocLake[n] + G_fLocWet[n] + G_fGloWet[n];
             G_fswbLandAreaFrac_ChangePct[n] = G_fswbLandAreaFracNextTimestep[n] * 100. - G_fswbLandAreaFrac[n] *
                                                                                          100.; // G_fwsb is in fraction, G_landAreaFrac (where G_fswbChange is calculated) is in %
 
         }
-            // endif (options.riverEvapoOpt == 1)
         else {
             //no evaporation from rivers
             G_riverAreaFracNextTimestep_Frac[n] = 0.;
             G_riverAreaFrac_ChangeFrac[n] = 0.;
         }
-        // end treatment of river area (for evaporation)
 
-
-        //calculate final G_fswb (should be now max. continental frac)  // FP HERE possibly reservoir fraction is missing?? // HMS: I agree, implemented
+        //calculate final G_fswb (should be now max. continental frac)
         G_fswb[n] = G_fLocLake[n] + G_fLocWet[n] + G_fGloLake[n] + G_fGloWet[n] + G_glo_res[n] +
                     G_riverAreaFracNextTimestep_Frac[n]; // for output purposes only!
 
+        if (day == last_day_in_month + 1) {
+            if (month==11)  // month == 11 is december see routing call in integrateWGHM
+                additionalOutIn.additionalOutputInput(n, 44) = G_glo_res[n];    // next month is next year so prevYear update
+            else
+                additionalOutIn.additionalOutputInput(n, 44) = G_glores_prevyear[n];    // other months prevYear stays the same
+        }
 
-        //}
-        //else {//no fswb change
-        //	G_fswbLandAreaFracChange[n] = 0.;
-        //}
-
-        //
         //now, adapt land area fraction for changes in fswb and riverareafrac
-        // First model day special condition: subtract changes from G_landAreaFrac[n]
-        if (0 == statusStarted_landAreaFracNextTimestep[n]) {
-            G_landAreaFracNextTimestep[n] = G_landAreaFrac[n] -
+        statusStarted_landAreaFracNextTimestep[n] = 1;
+        G_landAreaFracNextTimestep[n] = G_landAreaFrac[n] -
                                             (G_fswbLandAreaFrac_ChangePct[n] + (G_riverAreaFrac_ChangeFrac[n] * 100.));
-            statusStarted_landAreaFracNextTimestep[n] = 1; // indicate for the next iteration that first day has been treated
-            /*  if (n == 40812) {
-                    cout << "first model day special condition! " << endl;
-                    cout << "G_landAreaFracNextTimestep[n] " << G_landAreaFracNextTimestep[n] << endl;
-                    cout << "G_landAreaFrac[n] " << G_landAreaFrac[n] << endl;
-                    cout << "G_fswbLandAreaFrac_ChangePct[n] " << G_fswbLandAreaFrac_ChangePct[n] << endl;
-                }*/
-        }
-            // Following model days: only apply changes
-        else {
-            //on exception: reservoir fraction is added in this year, consider G_glores_change once.
-            if (G_glores_change[n] > 0.) {
-                G_landAreaFracNextTimestep[n] -= G_glores_change[n];
-                G_glores_change[n] = 0.;
-            }
-            G_landAreaFracNextTimestep[n] -= (G_fswbLandAreaFrac_ChangePct[n] + (G_riverAreaFrac_ChangeFrac[n] * 100.));
-            /*  if (n == 40812) {
-                    cout << "any other model day condition! " << endl;
-                    cout << "G_landAreaFracNextTimestep[n] " << G_landAreaFracNextTimestep[n] << endl;
-                    cout << "G_fswbLandAreaFrac_ChangePct[n] " << G_fswbLandAreaFrac_ChangePct[n] << endl;
-                }*/
-        }
-
-
-
-        // Felix Portmann FP & Petra Döll 2015
-        // TEMPORARILY REMOVE - POSSIBLY REINTRODUCE
-        // Introduce land area only when surface water body area has decreased so much that a limit of cell area
-        // (limit_zero_landAreaFrac_pct, e.g. 1% of cell area) is land area
-//            if ( (0. == G_landAreaFrac[n])
-//                 && ( ((geo.G_landfreq[n]+geo.G_fwaterfreq[n]) - (G_fswb[n]*100.)) >= limit_zero_landAreaFrac_pct )
-//                    ) {
-//                G_landAreaFracNextTimestep[n] = ((geo.G_landfreq[n]+geo.G_fwaterfreq[n]) - (G_fswb[n]*100.));
-//            }
-
-        // FP & CR 2015-06
         // Control not allowed range of values: Set to zero if calculated land fraction is less than a limit
         // limit currently set to zero
         // e.g. also for Caspian Sea cells
@@ -5079,219 +5180,70 @@ void routingClass::routing(const short year, short day, short month, const short
             G_landAreaFracNextTimestep[n] = 0.;
         }
 
-        //else // ((0 == options.fractionalRoutingOpt) && (options.aridareaOpt == 0))
-        //G_landAreaFracNewDay[n] = -99.0;
-
-        // HMS 2014-10-28 moved from lines around 920 to here so that area is consistent for daily.cpp calculations
-        //if (G_landAreaFracNewDay[n] > -99.0) // to prevent the initialisation with at the first time step
-        //G_landAreaFrac[n] = G_landAreaFracNewDay[n];
-        // Sum values for monthly averaging // only with specific writing options // Felix Portmann 2015-06
+        // Sum values for monthly averaging, only with specific writing options
         if ((2 == options.grid_store) || (4 == options.grid_store) || (6 == options.grid_store)) {
-            G_monthlyLandAreaFrac[n][month] += G_landAreaFrac[n];
+            G_monthlyLandAreaFrac(n,month) += G_landAreaFrac[n];
         }
 
     }
-    // endfor loop over grid cells
     // end of computation of SWB and land area fractions for the next day
 
-    //HMS 2015-03-02 now write out final G_fswb
+    // now write out final G_fswb
     for (int n = 0; n < ng; n++) {
         if ((2 == options.grid_store) || (4 == options.grid_store) || (6 == options.grid_store)) {
             if (options.outFswb == 1)
-                G_monthlyFswb[n][month] += G_fswb[n];
+                G_monthlyFswb(n,month) += G_fswb[n];
         }
         if ((3 == options.grid_store) || (4 == options.grid_store)) {
             if (options.outFswbDaily)
-                G_daily31Fswb[n][day_in_month - 1] = G_fswb[n]; // daily fraction of surface water bodies [mm]
+                G_daily31Fswb(n,day_in_month - 1) = G_fswb[n]; // daily fraction of surface water bodies [mm]
         }
         if ((5 == options.grid_store) || (6 == options.grid_store)) {
             if ((options.outFswbDaily) || ((options.scoutFswb) && (2 == options.day_store)))
-                G_daily365Fswb[n][day - 1] = G_fswb[n];
+                G_daily365Fswb(n,day - 1) = G_fswb[n];
         }
     }
-    // endfor loop over grid cells
+    //AEMS:
+    if (day == last_day_in_month + 1){
+         for (int n = 0; n < ng; n++){
+            additionalOutIn.additionalOutputInput(n, 8) = G_locWetlAreaReductionFactor[n];
+            additionalOutIn.additionalOutputInput(n, 9) = G_gloLakeEvapoReductionFactor[n];
+            additionalOutIn.additionalOutputInput(n, 10) = G_groundwaterStorage[n];
+            additionalOutIn.additionalOutputInput(n, 11) = G_locLakeAreaReductionFactor[n];
+            additionalOutIn.additionalOutputInput(n, 12) = G_gloWetlAreaReductionFactor[n];
+            additionalOutIn.additionalOutputInput(n, 13) = G_gloResEvapoReductionFactor[n];
+            additionalOutIn.additionalOutputInput(n, 14) = G_fswbInit[n];
+            additionalOutIn.additionalOutputInput(n, 15) = G_gloWetlStorage[n];
+//            additionalOutIn.additionalOutputInput(n, 16) = G_fswbLandAreaFrac[n];
+            additionalOutIn.additionalOutputInput(n, 17) = G_locWetlStorage[n];
+            additionalOutIn.additionalOutputInput(n, 18) = G_locLakeStorage[n];
+            additionalOutIn.additionalOutputInput(n, 19) = G_riverStorage[n];
+            additionalOutIn.additionalOutputInput(n, 21) = G_gloLakeStorage[n];
+            additionalOutIn.additionalOutputInput(n, 23) = G_gloResStorage[n];
+            additionalOutIn.additionalOutputInput(n, 28) = G_AllocatedUse[n];
+            additionalOutIn.additionalOutputInput(n, 29) = G_SecondCell[n];
+            additionalOutIn.additionalOutputInput(n, 32) = G_AllocUseToNeigborCell[n];
+            additionalOutIn.additionalOutputInput(n, 27) = G_UnsatAllocUse[n];
+            additionalOutIn.additionalOutputInput(n, 30) = G_daily_UnsatAllocUseNextDay[n];
+            additionalOutIn.additionalOutputInput(n, 31) = G_daily_allocatedUseNextDay[n];
+            additionalOutIn.additionalOutputInput(n, 33) = G_fswbLandAreaFracNextTimestep[n];
+            additionalOutIn.additionalOutputInput(n, 34) = G_PrevUnsatAllocUse[n];
+            additionalOutIn.additionalOutputInput(n, 35) = G_dailyRemainingUse[n];
+            additionalOutIn.additionalOutputInput(n, 36) = G_fGloLake[n];
+            additionalOutIn.additionalOutputInput(n, 37) = G_PrevTotalUnstatisfiedUse[n];
+            additionalOutIn.additionalOutputInput(n, 40) = G_dailySatisAllocatedUseInSecondCell[n];
+            additionalOutIn.additionalOutputInput(n, 41) = G_dailyAllocatedUse[n];
+            additionalOutIn.additionalOutputInput(n, 38) = G_reducedReturnFlow[n];
+            additionalOutIn.additionalOutputInput(n, 39) = G_unsatisfiedNAsFromIrrig[n];
+            additionalOutIn.additionalOutputInput(n, 49) = G_unsatisfiedNAsFromOtherSectors[n]; // Grid with unsatisfied NAs from other sectors than irrig associated with G_reducedReturnFlow
+            additionalOutIn.additionalOutputInput(n, 25) = G_withdrawalIrrigFromSwb[n] ;
+            additionalOutIn.additionalOutputInput(n, 26) = G_consumptiveUseIrrigFromSwb[n];
 
-#ifdef _WATERGAP_CHECKS_GLOBAL_H
-                                                                                                                            // Check Felix Portmann 2015 - for invalid data
-            if ( (year >= chk_year) && (month >= chk_month) && (day_in_month >= chk_day_in_month) ) {
-
-
-                // Checks for values less than zero LT0
-
-                // grids 1
-                check_array_double_LT0_YYMMDD(G_riverInflow, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_riverStorage, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_riverLength, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_riverAreaFrac, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_dailyRiverEvapo, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_dailyRiverPrecip, ng, year, month, day_in_month);
-
-                // grids 2
-                check_array_double_LT0_YYMMDD(G_localRunoff, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_localRunoffIntoRiver, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_localGWRunoff, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_localGWRunoffIntoRiver, ng, year, month, day_in_month);
-                check_array_short_LT0_YYMMDD(G_aindex, ng, year, month, day_in_month);
-
-                // fractions
-                // land area
-                check_array_double_LT0_YYMMDD(G_landAreaFrac, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_landWaterExclGloLakAreaFrac, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_landAreaFracNextTimestep, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_landAreaFracPrevTimestep, ng, year, month, day_in_month);
-
-                // river evaporation
-                check_array_double_LT0_YYMMDD(G_riverAreaFrac, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_maxRiverAreaFrac, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_riverAreaFracNextTimestep_Frac, ng, year, month, day_in_month);
-        //        check_array_double_LT0_YYMMDD(G_riverAreaFracChange, ng, year, month, day_in_month);
-
-                // Surface Water Bodies swb
-                check_array_double_LT0_YYMMDD(G_fswbLandAreaFracNextTimestep, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_fswbLandAreaFracInit, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_fswbLandAreaFrac, ng, year, month, day_in_month);
-        //        check_array_double_LT0_YYMMDD(G_fswbLandAreaFracChange, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_fLocLake, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_fLocWet, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_fGloWet, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_fGloLake, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_fswb, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_fswbInit, ng, year, month, day_in_month);
-                check_array_short_LT0_YYMMDD(G_fractionInit, ng, year, month, day_in_month);
-                check_array_double_LT0_YYMMDD(G_fswb_catchment, ng, year, month, day_in_month);
-
-                // scalars
-                check_value_double_LT0(cellArea);
-                check_value_double_LT0(CellRunoff);
-                check_value_double_LT0(transportedVolume);
-                check_value_double_LT0(dailyRiverEvapo);
-                check_value_double_LT0(inflow);
-                check_value_double_LT0(inflowUpstream);
-                check_value_double_LT0(totalInflow);
-                check_value_double_LT0(outflow);
-                check_value_double_LT0(maxStorage);
-                check_value_double_LT0(K);
-                // check_value_double_LT0(potCellRunoff); // Update 2015-06-08
-                check_value_double_LT0(riverAvail);
-                check_value_double_LT0(Kswbgw);
-                check_value_double_LT0(fswbFracCorr);
-                check_value_double_LT0(riverAreaFracDeficit);
-                check_value_double_LT0(fLocLak);
-                check_value_double_LT0(fLocWet);
-                check_value_double_LT0(fGloWet);
-                check_value_double_LT0(locLakeAreaReductionFactor);
-                check_value_double_LT0(gloLakeEvapoReductionFactor);
-                check_value_double_LT0(locWetlAreaReductionFactor);
-                check_value_double_LT0(gloWetlAreaReductionFactor);
-                check_value_double_LT0(gloResEvapoReductionFactor);
-                check_value_double_LT0(riverAreaReductionFactor);
-                check_value_double_LT0(PETgwr);
-                check_value_double_LT0(PETgwrMax);
-                check_value_double_LT0(PETgwrRedFactor);
-                check_value_double_LT0(PETgwrRemUseRedFactor);
-                check_value_double_LT0(gloResEvapoReductionFactor);
-                check_value_double_LT0(riverAreaReductionFactor);
-                check_value_double_LT0(groundwater_runoff_km3);
-                // check_value_double_LT0(G_groundwaterStoragePrevStep); // G_groundwaterStoragePrevStep may get negative because of netGWin // Felix Portmann 2015-06
-                // additionally:
-                check_value_double_LT0(b); // counter variable
-                check_value_double_LT0(Kswbgw); // fixed value
-
-
-                // Check for NaN
-
-                // grids 1
-                check_array_double_NaN_YYMMDD(G_riverInflow, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_riverStorage, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_riverLength, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_riverAreaFrac, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_dailyRiverEvapo, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_dailyRiverPrecip, ng, year, month, day_in_month);
-
-                // grids 2
-                check_array_double_NaN_YYMMDD(G_localRunoff, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_localRunoffIntoRiver, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_localGWRunoff, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_localGWRunoffIntoRiver, ng, year, month, day_in_month);
-                check_array_short_NaN_YYMMDD(G_aindex, ng, year, month, day_in_month);
-
-                // fractions
-                // land area
-                check_array_double_NaN_YYMMDD(G_landAreaFrac, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_landWaterExclGloLakAreaFrac, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_landAreaFracNextTimestep, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_landAreaFracPrevTimestep, ng, year, month, day_in_month);
-
-                // river evaporation
-                check_array_double_NaN_YYMMDD(G_riverAreaFrac, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_maxRiverAreaFrac, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_riverAreaFracNextTimestep_Frac, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_riverAreaFrac_ChangeFrac, ng, year, month, day_in_month);
-
-                // Surface Water Bodies swb
-                check_array_double_NaN_YYMMDD(G_fswbLandAreaFracNextTimestep, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_fswbLandAreaFracInit, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_fswbLandAreaFrac, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_fswbLandAreaFrac_ChangePct, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_fLocLake, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_fLocWet, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_fGloWet, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_fGloLake, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_fswb, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_fswbInit, ng, year, month, day_in_month);
-                check_array_short_NaN_YYMMDD(G_fractionInit, ng, year, month, day_in_month);
-                check_array_double_NaN_YYMMDD(G_fswb_catchment, ng, year, month, day_in_month);
-
-
-                // Scalars
-                check_value_double_NaN(cellArea);
-                check_value_double_NaN(CellRunoff);
-                check_value_double_NaN(transportedVolume);
-                check_value_double_NaN(dailyRiverEvapo);
-                check_value_double_NaN(inflow);
-                check_value_double_NaN(inflowUpstream);
-                check_value_double_NaN(totalInflow);
-                check_value_double_NaN(outflow);
-                check_value_double_NaN(maxStorage);
-                check_value_double_NaN(K);
-                check_value_double_NaN(potCellRunoff);
-                check_value_double_NaN(riverAvail);
-                check_value_double_NaN(Kswbgw);
-                check_value_double_NaN(fswbFracCorr);
-                check_value_double_NaN(riverAreaFracDeficit);
-                check_value_double_NaN(fLocLak);
-                check_value_double_NaN(fLocWet);
-                check_value_double_NaN(fGloWet);
-                check_value_double_NaN(locLakeAreaReductionFactor);
-                check_value_double_NaN(gloLakeEvapoReductionFactor);
-                check_value_double_NaN(locWetlAreaReductionFactor);
-                check_value_double_NaN(gloWetlAreaReductionFactor);
-                check_value_double_NaN(gloResEvapoReductionFactor);
-                check_value_double_NaN(riverAreaReductionFactor);
-                check_value_double_NaN(PETgwr);
-                check_value_double_NaN(PETgwrMax);
-                check_value_double_NaN(PETgwrRedFactor);
-                check_value_double_NaN(PETgwrRemUseRedFactor);
-                check_value_double_NaN(gloResEvapoReductionFactor);
-                check_value_double_NaN(riverAreaReductionFactor);
-                check_value_double_NaN(groundwater_runoff_km3);
-                check_value_double_NaN(G_groundwaterStoragePrevStep);
-
-                // additionally:
-                check_value_double_NaN(b); // counter variable
-                check_value_double_NaN(Kswbgw); // fixed value
-                check_value_double_NaN(netGWin); // possibly negative value (ONLY NaN testing)
-
-            }
-            // endif check date reached // Check Felix Portmann 2015
-#endif
-
+         }
+    }
 }
-// end routing
-// end of routing
 
-
-void routingClass::annualWaterUsePostProcessing(short year) {
+void routingClass::annualWaterUsePostProcessing(short year, AdditionalOutputInputFile &additionalOutIn) {
     if (options.subtract_use >= 1) {
         char filename[250];
         int n;
@@ -5307,6 +5259,12 @@ void routingClass::annualWaterUsePostProcessing(short year) {
                 // This means: all the desired uses of the current year have been
                 // satisfied and a fraction of the previous year also.
                 G_UnsatisfiedUsePrevYear[n] = G_totalUnsatisfiedUse[n];
+                G_unsatisfiedNAsFromIrrigPrevYear[n] = G_unsatisfiedNAsFromIrrig[n];
+                G_unsatisfiedNAsFromOtherSectorsPrevYear[n] = G_unsatisfiedNAsFromOtherSectors[n];
+                G_reducedReturnFlowPrevYear[n] = G_reducedReturnFlow[n];
+                G_unsatisfiedNAsFromIrrig[n] = 0.;
+                G_unsatisfiedNAsFromOtherSectors[n] = 0.;
+                G_reducedReturnFlow[n] = 0.;
                 G_totalUnsatisfiedUse[n] = 0.;
             } else {
                 // This means: we have even more unsatisfied use than at the end
@@ -5315,23 +5273,45 @@ void routingClass::annualWaterUsePostProcessing(short year) {
                 // but the grid of the current year should only contain the values
                 // of the current year.
                 G_totalUnsatisfiedUse[n] -= G_UnsatisfiedUsePrevYear[n];
+                G_unsatisfiedNAsFromIrrig[n] -= G_unsatisfiedNAsFromIrrigPrevYear[n];
+                G_unsatisfiedNAsFromOtherSectors[n] -= G_unsatisfiedNAsFromOtherSectorsPrevYear[n];
+                G_reducedReturnFlow[n] -= G_reducedReturnFlowPrevYear[n];
+                if ((G_unsatisfiedNAsFromIrrig[n] + G_unsatisfiedNAsFromOtherSectors[n]) < 0){
+                    G_unsatisfiedNAsFromIrrig[n] = 0;
+                    G_unsatisfiedNAsFromOtherSectors[n] = 0;
+                    G_reducedReturnFlow[n] = 0;
+                } else if (G_unsatisfiedNAsFromOtherSectors[n] < 0)
+                {
+                    G_unsatisfiedNAsFromIrrig[n] += G_unsatisfiedNAsFromOtherSectors[n];
+                    G_unsatisfiedNAsFromOtherSectors[n] = 0;
+                } else if (G_unsatisfiedNAsFromIrrig[n] < 0) {
+                    G_unsatisfiedNAsFromOtherSectors[n] += G_unsatisfiedNAsFromIrrig[n];
+                    G_unsatisfiedNAsFromIrrig[n] = 0;
+                    G_reducedReturnFlow[n]=0;
+                }
+                if (G_reducedReturnFlow[n] > 0) {
+                    G_reducedReturnFlow[n] = 0;
+                    G_unsatisfiedNAsFromIrrig[n] = 0;
+                }
             }
+            // AEMS: store G_totalUnsatisfiedUse and G_UnsatisfiedUsePrevYear of last day of the year
+            additionalOutIn.additionalOutputInput(n, 3) = G_totalUnsatisfiedUse[n];
+            additionalOutIn.additionalOutputInput(n, 4) = G_UnsatisfiedUsePrevYear[n];
+            additionalOutIn.additionalOutputInput(n, 50) = G_reducedReturnFlowPrevYear[n];
+            additionalOutIn.additionalOutputInput(n, 51) = G_unsatisfiedNAsFromIrrigPrevYear[n];
+            additionalOutIn.additionalOutputInput(n, 52) = G_unsatisfiedNAsFromOtherSectorsPrevYear[n];
+            additionalOutIn.additionalOutputInput(n, 38) = G_reducedReturnFlow[n];
+            additionalOutIn.additionalOutputInput(n, 39) = G_unsatisfiedNAsFromIrrig[n];
+            additionalOutIn.additionalOutputInput(n, 49) = G_unsatisfiedNAsFromOtherSectors[n]; // Grid with unsatisfied NAs from other sectors than irrig associated with G_reducedReturnFlow
         }
-
         if ((options.grid_store > 0) && (year >= options.evalStartYear)) {
-            double G_array[ng];
+            Grid<> G_array;
 
-            if (options.outUnsatUseSWPrev) { // new output options 2.1f
-                for (n = 0; n < ng; n++)
-                    G_array[n] = G_UnsatisfiedUsePrevYear[n]; // conversion double -> float
-                sprintf(filename, "%s/G_UNSAT_USE_SW_PREV_%d.UNF0", options.output_dir, year);
-                gridIO.writeUnfFile(filename, ng, &G_array[0]);
+            if (options.outUnsatUseSWPrev) {
+                G_UnsatisfiedUsePrevYear.write(options.output_dir + "/G_UNSAT_USE_SW_PREV_" + to_string(year) + ".UNF0");
             }
-            if (options.outUnsatUseSW) { // new output options 2.1f
-                for (n = 0; n < ng; n++)
-                    G_array[n] = (float) G_totalUnsatisfiedUse[n]; // conversion double -> float
-                sprintf(filename, "%s/G_UNSAT_USE_SW_%d.UNF0", options.output_dir, year);
-                gridIO.writeUnfFile(filename, ng, &G_array[0]);
+            if (options.outUnsatUseSW) {
+                G_totalUnsatisfiedUse.write(options.output_dir + "/G_UNSAT_USE_SW_" + to_string(year) + ".UNF0");
             }
             if (options.outActualNAS) { // new output options 2.1f
                 for (n = 0; n < ng; n++) {
@@ -5339,20 +5319,8 @@ void routingClass::annualWaterUsePostProcessing(short year) {
                                      1000000000.; // conversion km3/month --> m3/month to avoid loss of small numbers during casting operation.
                     G_array[n] = G_actualUse[n]; // conversion double -> float
                 }
-                sprintf(filename, "%s/G_ACTUAL_NAS_%d.UNF0", options.output_dir, year);
-                gridIO.writeUnfFile(filename, ng, &G_array[0]);
+                G_array.write(options.output_dir + "/G_ACTUAL_NAS_" + to_string(year) + ".UNF0");
             }
-            // detect use satisfaction from neighbour cells
-            /*
-			 for (n = 0; n < ng; n++)
-			 G_array[n] = (float) G_extractedFromNeighb[n]; // conversion double -> float
-			 sprintf(filename, "%s/G_EXTRACTED_FROM_NEIGHB_%d.UNF0", options.output_dir, year);
-			 gridIO.writeUnfFile(filename, ng, &G_array[0]);
-			 for (n = 0; n < ng; n++)
-			 G_array[n] = (float) G_deliveredToNeighb[n]; // conversion double -> float
-			 sprintf(filename, "%s/G_DELIVERED_TO_NEIGHB_%d.UNF0", options.output_dir, year);
-			 gridIO.writeUnfFile(filename, ng, &G_array[0]);
-			 */
 
         }
         // Note: ACTUAL_USE_[YEAR] + UNSAT_USE_[YEAR] does not equal CONS_WATER_USE_[YEAR]
@@ -5361,9 +5329,7 @@ void routingClass::annualWaterUsePostProcessing(short year) {
         // ACTUAL_USE_[YEAR] + UNSAT_USE_[YEAR] = CONS_WATER_USE[YEAR] + (UNSAT_USE_[YEAR-1] - UNSAT_USE_PREV_[YEAR])
 
     }
-
 }
-// end annualWaterUsePostProcessing
 
 void routingClass::checkTimeStep() {
     // this is the public function
@@ -5373,57 +5339,240 @@ void routingClass::checkTimeStep() {
     // velocity
     riverVelocity = defaultRiverVelocity; // [km/day]
 }
-// end checkTimeStep
 
-void routingClass::updateLandAreaFrac() {
+void routingClass::updateLandAreaFrac(AdditionalOutputInputFile &additionalOutIn) {
     //LandAreaFracNextTimestep is already calculated, now G_LandAreaFrac has to be updated to be used consistently in daily and routing for the next timestep
     for (int n = 0; n < ng; n++) {
         G_landAreaFracPrevTimestep[n] = G_landAreaFrac[n];
         G_landAreaFrac[n] = G_landAreaFracNextTimestep[n];
+        //AEMS:
+        additionalOutIn.additionalOutputInput(n,6) = G_landAreaFrac[n]; // G_landAreaFrac[n]
+        additionalOutIn.additionalOutputInput(n,7) = G_landAreaFracPrevTimestep[n]; // G_landAreaFracPrevTimestep[n]
     }
 }
-// end updateLandAreaFrac
 
-// FP20161018N002 Reservoir operation start years
+void routingClass::update_landarea_red_fac_PDAF(calibParamClass &calParam, AdditionalOutputInputFile &additionalOutIn) {
+    double cellArea = 0., maxStorage = 0.;
+    evapoReductionExp = 3.32193;
+
+    // routingCell: (WG2.2) added for ordered routing scheme
+    for (int routingCell = 0; routingCell < ng; routingCell++) {
+
+        int n = (G_routingCell[routingCell] - 1);
+        double M_EVAREDEX__at__n_routing = calParam.getValue(M_EVAREDEX, n);
+
+        cellArea = geo.areaOfCellByArrayPos(n);
+        // local Lake
+        if (G_loc_lake[n] > 0.) {
+            maxStorage = ((G_loc_lake[n]) / 100.) * cellArea * G_lakeDepthActive[n]; // [km3]
+            G_locLakeAreaReductionFactor[n] = 1. -
+                                              pow(fabs(G_locLakeStorage[n] - maxStorage)
+                                                  / (2. * maxStorage),
+                                                  (M_EVAREDEX__at__n_routing * evapoReductionExp));
+
+            if (G_locLakeAreaReductionFactor[n] < 0.)
+                G_locLakeAreaReductionFactor[n] = 0.;
+
+            if (G_locLakeAreaReductionFactor[n] > 1.)  // (could occur due to numerical inaccuracies)
+                G_locLakeAreaReductionFactor[n] = 1.;
+        }
+
+        // local wetland
+        if (G_loc_wetland[n] > 0.) {
+            maxStorage = ((G_loc_wetland[n]) / 100.) * cellArea * G_wetlDepthActive[n];
+
+            // Area reduction factor is now calculated for the next day.
+            // Cell-specific calibration parameters - Apply multiplier
+            G_locWetlAreaReductionFactor[n] = 1. -
+                                              pow(fabs(G_locWetlStorage[n] - maxStorage)
+                                                  / (maxStorage),
+                                                  (M_EVAREDEX__at__n_routing * evapoReductionExp));
+
+
+            if (G_locWetlAreaReductionFactor[n] < 0.)    // (could occur due to numerical inaccuracies)
+                G_locWetlAreaReductionFactor[n] = 0.;
+
+            if (G_locWetlAreaReductionFactor[n] > 1.)  // (could occur due to numerical inaccuracies)
+                G_locWetlAreaReductionFactor[n] = 1.;
+        }
+        // global wetlands
+        if (G_glo_wetland[n] > 0.) {
+            maxStorage = ((G_glo_wetland[n]) / 100.) * cellArea * G_wetlDepthActive[n];
+
+            G_gloWetlAreaReductionFactor[n] = 1. -
+                                              pow(fabs(G_gloWetlStorage[n] - maxStorage)
+                                                  / maxStorage,
+                                                  (M_EVAREDEX__at__n_routing * evapoReductionExp));
+
+            if (G_gloWetlAreaReductionFactor[n] < 0.)  // (could occur due to numerical inaccuracies)
+                G_gloWetlAreaReductionFactor[n] = 0.;
+
+            if (G_gloWetlAreaReductionFactor[n] > 1.)  // (could occur due to numerical inaccuracies)
+                G_gloWetlAreaReductionFactor[n] = 1.;
+        }
+        // global lakes
+        if (G_lake_area[n] > 0.) {
+            maxStorage = ((double) G_lake_area[n]) * G_lakeDepthActive[n];
+
+            G_gloLakeEvapoReductionFactor[n] = 1. -
+                                               pow(fabs(G_gloLakeStorage[n] - maxStorage)
+                                                   / (2. * maxStorage),
+                                                   (M_EVAREDEX__at__n_routing * evapoReductionExp));
+
+
+            if (G_gloLakeEvapoReductionFactor[n] < 0.)    // (could occur due to numerical inaccuracies)
+                G_gloLakeEvapoReductionFactor[n] = 0.;
+
+            if (G_gloLakeEvapoReductionFactor[n] > 1.)  // (could occur due to numerical inaccuracies)
+                G_gloLakeEvapoReductionFactor[n] = 1.;
+        }
+        // reservoirs
+        if (G_reservoir_area[n] > 0.) { //cell is a reservoir cell with a well known type
+            maxStorage = G_stor_cap[n];
+
+            //Evaporation reduction factor is now calculated for the next day.
+            G_gloResEvapoReductionFactor[n] = 1. - pow(fabs(G_gloResStorage[n] - maxStorage)
+                                                       / maxStorage, evapoReductionExpReservoir);
+
+            if (G_gloResEvapoReductionFactor[n] < 0.)    // (could occur due to numerical inaccuracies)
+                G_gloResEvapoReductionFactor[n] = 0.;
+
+            if (G_gloResEvapoReductionFactor[n] > 1.)  // (could occur due to numerical inaccuracies)
+                G_gloResEvapoReductionFactor[n] = 1.;
+        }
+
+        if ((G_loc_lake[n] > 0.) && (G_locLakeAreaReductionFactor[n] > 0.)) {
+            G_fLocLake[n] = (G_locLakeAreaReductionFactor[n] * G_loc_lake[n] / 100.);
+        } else {
+            G_fLocLake[n] = 0.; // to prevent that a single fraction values of a previous grid cell is used (if the conditions of the if clause is not true), the fractions will be 0 if the if clause is not true.
+        }
+
+        if ((G_loc_wetland[n] > 0.) && (G_locWetlAreaReductionFactor[n] > 0.)) {
+            G_fLocWet[n] = (G_locWetlAreaReductionFactor[n] * G_loc_wetland[n] / 100.);
+        } else {
+            G_fLocWet[n] = 0.;
+        }
+
+        if ((G_glo_wetland[n] > 0.) && (G_gloWetlAreaReductionFactor[n] > 0.)) {
+            G_fGloWet[n] = (G_gloWetlAreaReductionFactor[n] * G_glo_wetland[n] / 100.);
+        } else {
+            G_fGloWet[n] = 0.;
+        }
+        // New current fraction
+
+        G_fswbLandAreaFracNextTimestep[n] = G_fLocLake[n] + G_fLocWet[n] + G_fGloWet[n]; // nextTimestep bc. in std code in function routing nextTimestep is copied into fswbLandAreaFrac
+        G_fswbLandAreaFrac[n]=additionalOutIn.additionalOutputInput(n, 33); // G_fswbLandAreaFracNextTimestep[n] originally calculated a day before, put into G_fswbLandAreaFrac[n] for convenience, will be overwritten anyway
+        G_fswbLandAreaFrac_ChangePct[n]=G_fswbLandAreaFracNextTimestep[n] * 100. - G_fswbLandAreaFrac[n] * 100.;
+
+        G_landAreaFrac[n] = additionalOutIn.additionalOutputInput(n,6);
+        G_landAreaFrac[n] =  G_landAreaFrac[n] - (G_fswbLandAreaFrac_ChangePct[n]);
+
+        if (G_landAreaFrac[n] < 0.)
+            G_landAreaFrac[n] = 0.;
+        G_landAreaFracPrevTimestep[n] = additionalOutIn.additionalOutputInput(n,7); //G_landAreaFracPrevTimestep[n];
+        statusStarted_landfreq_fwaterfreq_landAreaFrac[n] = 1;
+    }
+}
+
+// Reservoir operation start years
 // Transfer land area fraction of reservoirs (in percent) of current year in array of previous year for use in the next year
 void routingClass::updateGloResPrevYear_pct() {
     for (int n = 0; n < ng; n++) {
         G_glores_prevyear[n] = G_glo_res[n];
     }
 }
-// end updateGloResPrevYear
+
 /**
  *
- * @brief This class updates the groundwater net abstraction due to not statisfied SW usage
+ * @brief This method updates the groundwater net abstraction due to not statisfied SW usage
  *
- * This method corrects the groundwater net abstraction in case of not fullfilled net abstraction from surface water
- * bodies(swb). GWSWUSE is assuming that all water abstraction from swb is fullfilled and calculates gw recharge
- * based on this assumption. Thus groundwater recharge can be overestimated. Hence the unstatisfied surface water
- * use from previous time step is compared to irrigation usage from previous time step. The GW recharge of current
- * time step is then adapted, assuming the remaining use is solely irrigation use.
+ * This method corrects the net abstraction from groundwater in case of not fullfilled net abstraction from surface
+ * water bodies(swb). GWSWUSE is assuming that potential water abstractions from swb are fullfilled and accordingly
+ * calculates return flows to groundwater resulting from irrrigation with surface water, which impact net abstractions
+ * from groundwater NAg. Thus return flows to groundwater (which can only result from irrigation in WGHM) can be
+ * overestimated.  For this adaption it is assumed that irrigation is satisfied with the lowest priority,
+ * i.e. the unsatisfied NAs is assumed to be caused by less NAs for irrigation, up to setting irrigation water use
+ * to zero. Based on this assumption, a new value for water abstractions from surface water for irrigation (wusi_new)
+ * is computed and NAg is then reduced to NAgnew following the equations provided in Döll et al. (2012).
+ * Furthermore due to delayed use satisfaction and use satisfaction through neighbouring cells a helper variable is
+ * used (G_dailyRemainingUse[n]) which is calculated as RemainingUse - RemainingUse from last time step. By this return
+ * flows can be readded to NAg, when potential NAs is satisfied delayed.
  * @param n
  * @param month
  */
-double routingClass::updateNetAbstractionGW(int n, int month) {
+double routingClass::updateNetAbstractionGW(int n) {
+    double NAgnew = 0.; // modified NAg (return flows reduced or reintroduced)
+    double returnflowChange = 0.; // amount by which original NAg is changed could be negative (return flows are reduced) or positive (return flows are reintroduced)
+    double eff = 0.; // efficency of irrig water usage from surface water bodies
+    double frgi = 0.; // fraction of return flows which flow into groundwater
+    double factor = 0.; // factor to calculate new waterwithdrawal for irrigation from swb
+    double WUsiNew = 0.; // waterwithdrawal for irrig from swb calculated based on unsatisfied NAs
+    double dailyRemainingUseFromIrrig = 0.; // dailyremaininguse change which originates from irrigation
+    double reintroducedRatio = 0.; // negative ratio of reduced return flow which should be reintroduced due to delayed satisfaction
 
-    // Only update NAg if WUsi is existent
-    if (G_monthlyWUIrrig[n][month] > 0) {
-        double daily_WUIrrig = G_monthlyWUIrrig[n][month] / (1000000000. * (double) numberOfDaysInMonth[month]);
-        double daily_CUIrrig = G_monthlyCUIrrig[n][month] / (1000000000. * (double) numberOfDaysInMonth[month]);
-        double eff = daily_CUIrrig / daily_WUIrrig;
-        double frgi = G_fractreturngw_irrig[n];
-        double factor = 1 - (1 - frgi) * (1 - eff);
-        double wusi_new = 1 / factor * (daily_WUIrrig * factor - G_dailyRemainingUse[n]);
-        double NAgnew = G_dailydailyNUg[n] - (frgi * (1 - eff) * (wusi_new - daily_WUIrrig));
+    // G_dailyRemainingUse is > 0 when returnflows need to be reduced, < 0 when returnflows need to be reintroduced due
+    // to delayed satisfaction, due to numerical issues the threshold is set to 1.e-12 resp -1.e-12
+    if (G_dailyRemainingUse[n] > 1.e-12) {
+        // Only update NAg if WUsi is existent
+        if (G_withdrawalIrrigFromSwb[n] > 0.) {
+            eff = G_consumptiveUseIrrigFromSwb[n] / G_withdrawalIrrigFromSwb[n];
+            frgi = G_fractreturngw_irrig[n];
+            factor = 1 - (1 - frgi) * (1 - eff);
+            WUsiNew = 1 / factor * (G_withdrawalIrrigFromSwb[n] * factor - G_dailyRemainingUse[n]);
+            if (WUsiNew < 0.) {
+                // WUsiNew is below zero, when dailyRemainingUse is bigger than the estimated partion
+                // of NAs from Irrigation
+                WUsiNew = 0.;
+                // unsatisfiedNAsfromirrig is needed to scale the reintroduction of returnflows in NAg
+                G_unsatisfiedNAsFromIrrig[n] += G_withdrawalIrrigFromSwb[n] * factor;
+                G_unsatisfiedNAsFromOtherSectors[n] += G_dailyRemainingUse[n] - (G_withdrawalIrrigFromSwb[n] * factor);
+            } else { // unsatisfied use stems solely from irrigation
+                G_unsatisfiedNAsFromIrrig[n] += G_dailyRemainingUse[n];
+            };
+            returnflowChange = (frgi * (1 - eff) * (WUsiNew - G_withdrawalIrrigFromSwb[n]));
+            G_reducedReturnFlow[n] += returnflowChange;
+            NAgnew = G_dailydailyNUg[n] - returnflowChange;
+            G_dailyRemainingUse[n] = 0.;
+            return NAgnew;
+        } else {
+            G_unsatisfiedNAsFromOtherSectors[n] += G_dailyRemainingUse[n];
+            return G_dailydailyNUg[n];
+        }
+    } else if (G_dailyRemainingUse[n] < -1.e-12 ) {
+        dailyRemainingUseFromIrrig = G_dailyRemainingUse[n] + G_unsatisfiedNAsFromOtherSectors[n];
+        if (dailyRemainingUseFromIrrig < 0.) {
+            G_unsatisfiedNAsFromOtherSectors[n] = 0.;
+        } else {
+            G_unsatisfiedNAsFromOtherSectors[n] += G_dailyRemainingUse[n];
+            G_dailyRemainingUse[n] = 0.;
+            return G_dailydailyNUg[n];
+        }
+        if (G_unsatisfiedNAsFromIrrig[n] == 0.){
+            // this if clause is catching cases where reduced return flows are tried to be reintroduced, which aren't
+            // existing. This can happen in rare cases of numerical inaccuracies.
+            G_dailyRemainingUse[n] = 0.;
+            return G_dailydailyNUg[n];
+        }
+        reintroducedRatio = (dailyRemainingUseFromIrrig / G_unsatisfiedNAsFromIrrig[n]);
+        if (reintroducedRatio < -1.){
+            reintroducedRatio = -1.;
+            dailyRemainingUseFromIrrig = G_unsatisfiedNAsFromIrrig[n] * -1.;
+        }
+        returnflowChange =  (reintroducedRatio * G_reducedReturnFlow[n]);
+
+        G_unsatisfiedNAsFromIrrig[n] += dailyRemainingUseFromIrrig;
+        G_reducedReturnFlow[n] += returnflowChange;
+        NAgnew = G_dailydailyNUg[n] - returnflowChange;
+        G_dailyRemainingUse[n] = 0.;
         return NAgnew;
     }
-    else{
+    else {
         return G_dailydailyNUg[n];
     }
 }
 
 short routingClass::checkTimeStep(double riverVelocity, short numberOfTimeSteps) {
-    extern short G_toBeCalculated[ng];
+
 
     // find most nothern and southern row
     short minRow = 1000;
@@ -5456,8 +5605,6 @@ short routingClass::checkTimeStep(double riverVelocity, short numberOfTimeSteps)
     lat = 0.25 + minRow * 0.5;
     horizDist = 2 * pi * earthRadius * sin(lat * pi / 180.0) * 0.5 / 360.0;
 
-    //cout << "Horizontal extend of smallest cell: " << horizDist << endl;
-
     short newNumberOfTimeSteps;
 
     newNumberOfTimeSteps = numberOfTimeSteps;
@@ -5468,35 +5615,33 @@ short routingClass::checkTimeStep(double riverVelocity, short numberOfTimeSteps)
     }
     return newNumberOfTimeSteps;
 }
-// end checkTimeStep
 
-// Set (initialize) cell-specific active lake depth (in km) as array to enable individual time-series  // FP
+// Set (initialize) cell-specific active lake depth (in km) as array to enable individual time-series
 // Start with calibration parameter
-void routingClass::initLakeDepthActive() {
+void routingClass::initLakeDepthActive(calibParamClass &calParam)// OE: added calParam
+            {
 
     // Initialize array with calibration parameter values
     // Data unit of depth has to be converted (m to km)
     for (int n = 0; n < ng; n++) {
-        G_lakeDepthActive[n] = (calibParam.getValue(P_LAK_D, n) *
+        G_lakeDepthActive[n] = (calParam.getValue(P_LAK_D, n) *
                                 CONV_FACTOR__LENGTH__M_TO_KM); // [km]  // OBSOLETE now read from calibration parameter file // FP
     }
 
 }
-// end setLakeDepthActive
 
-// Set (initialize) cell-specific active wetland depth (in km) as array to enable individual time-series  // FP
+// Set (initialize) cell-specific active wetland depth (in km) as array to enable individual time-series
 // Start with calibration parameter
-void routingClass::initWetlDepthActive() {
+void routingClass::initWetlDepthActive(calibParamClass &calParam) // OE: added calParam
+            {
 
     // Initialize array with calibration parameter values
     // Data unit of depth has to be converted (m to km)
     for (int n = 0; n < ng; n++) {
-        G_wetlDepthActive[n] = (calibParam.getValue(P_WET_D, n) *
+        G_wetlDepthActive[n] = (calParam.getValue(P_WET_D, n) *
                                 CONV_FACTOR__LENGTH__M_TO_KM); // [km]  // OBSOLETE now read from calibration parameter file // FP
     }
-
 }
-// end setWetlDepthActive
 
 
 void routingClass::setLakeWetlToMaximum(const short start_year) {
@@ -5504,8 +5649,8 @@ void routingClass::setLakeWetlToMaximum(const short start_year) {
     // or at first model year // FP20161018N002: any possible specified year
     for (int n = 0; n <= ng - 1; n++) {
 
-        // Cell-specific active lake depth - Use array (initialized from cell-specific parameter)  // FP
-        // Cell-specific active wetland depth - Use array (initialized from cell-specific parameter)  // FP
+        // Cell-specific active lake depth - Use array (initialized from cell-specific parameter)
+        // Cell-specific active wetland depth - Use array (initialized from cell-specific parameter)
         G_locLakeStorage[n] = (G_loc_lake[n] / 100.)
                               * geo.areaOfCellByArrayPos(n) * G_lakeDepthActive[n];
         G_locWetlStorage[n] = (G_loc_wetland[n] / 100.)
@@ -5519,35 +5664,33 @@ void routingClass::setLakeWetlToMaximum(const short start_year) {
 
         // Use reservoir algorithm with reservoirs and regulated lakes
         if ((options.antNatOpt == 0) && (options.resOpt == 1)) {
-//			G_gloResStorage[n] = G_stor_cap[n] * 0.85; //for new reservoir algorithm (vol. from published data) // Obsolete
-
-            // Under certain conditions set storage capacity to 85% of full capacity
 
             //set to storage capacity if no operational year and start year not later than reference year (e.g. 2000)
             // for both, reg. lakes and reservoirs
             if ((options.resYearOpt == 0) && (options.resYearReference >= G_res_start_year[n]) &&
                 (G_stor_cap_full[n] > -99)) {
-                G_gloResStorage[n] = G_stor_cap_full[n] * 0.85; //for new reservoir algorithm (vol. from published data)
+                G_gloResEvapoReductionFactor[n] = 1.;
+                G_gloResStorage[n] = G_stor_cap_full[n]; //for new reservoir algorithm (vol. from published data)
             }
+            else
+                G_gloResEvapoReductionFactor[n] = 0.;
             //set reservoir storage to capacity for reservoirs and regulated lakes which are already operating at model start year
             if ((options.resYearOpt == 1) && (start_year >= G_res_start_year[n]) && (G_stor_cap_full[n] > -99)) {
-                G_gloResStorage[n] = G_stor_cap_full[n] * 0.85; //for new reservoir algorithm (vol. from published data)
-            }
+                G_gloResEvapoReductionFactor[n] = 1.;
+                G_gloResStorage[n] = G_stor_cap_full[n]; //for new reservoir algorithm (vol. from published data)
+            } else
+                G_gloResEvapoReductionFactor[n] = 0.;
 
-// HERE CHECK IF CORRECT / NO DOUBLE COUNTING
+            // HERE CHECK IF CORRECT / NO DOUBLE COUNTING
             // In case of regulated lake: storage = product of area * lake_depth
             //increase reservoir storage if regulated lake is not yet operating but handle it like if it would be a global lake
             if (((options.resYearOpt == 1) && (G_reg_lake_status[n] == 1) && (start_year < G_res_start_year[n]))
                 || ((options.resYearOpt == 0) && (G_reg_lake_status[n] == 1) &&
                     (options.resYearReference < G_res_start_year[n]))) {
                 G_gloResStorage[n] += G_reservoir_area_full[n] * G_lakeDepthActive[n];
+                // G_gloResEvapoReductionFactor[n] = 0. due to if else statements above
             }
-            //increase global lake storage if regulated lake and resOpt == 0
-            //if ((options.resOpt == 0) && (G_reg_lake_status[n] == 1)) {
-            //    G_gloLakeStorage[n] += G_reservoir_area_full[n] * G_lakeDepthActive[n];
-            //}
         }
-        // end if (options.resOpt == 1)
 
         //initialize area reduction factors
         // initial value at start of first model year or at each calibration year)
@@ -5555,7 +5698,7 @@ void routingClass::setLakeWetlToMaximum(const short start_year) {
         G_locWetlAreaReductionFactor[n] = 1.;
         G_gloLakeEvapoReductionFactor[n] = 1.;
         G_gloWetlAreaReductionFactor[n] = 1.;
-        G_gloResEvapoReductionFactor[n] = 1.;
+
         if (options.riverEvapoOpt == 1) {
             G_riverAreaReductionFactor[n] = 0.5; //corresponds to around 20% of bankfull storage for the first model day
             // river area fraction (as fraction of cell area)
@@ -5573,13 +5716,8 @@ void routingClass::setLakeWetlToMaximum(const short start_year) {
             G_riverAreaFracNextTimestep_Frac[n] = 0.;
             G_riverAreaFrac_ChangeFrac[n] = 0.;
         }
-        // end treatment of river area (for evaporation)
-
     }
-    // end loop over grid cells
-
 }
-// end setLakeWetlToMaximum
 
 double routingClass::getActualStorage(int cellNumber, short selection) {
     switch (selection) {
@@ -5591,7 +5729,6 @@ double routingClass::getActualStorage(int cellNumber, short selection) {
             return G_gloLakeStorage[cellNumber - 1];
         case '4':
             return G_gloWetlStorage[cellNumber - 1];
-            // ET: for new reservoir algorithm
         case '5':
             return G_gloResStorage[cellNumber - 1];
         default:
@@ -5599,7 +5736,6 @@ double routingClass::getActualStorage(int cellNumber, short selection) {
             return -9999;
     }
 }
-// end getActualStorage
 
 double routingClass::getActualStorageRatio(int cellNumber, short selection) {
     double maxStorage;
@@ -5619,21 +5755,17 @@ double routingClass::getActualStorageRatio(int cellNumber, short selection) {
             if (G_loc_wetland[cellNumber - 1] <= 0)
                 return -9999;
             else {
-                // Cell-specific active wetland depth - Use array (initialized from cell-specific parameter)  // FP
+                // Cell-specific active wetland depth - Use array (initialized from cell-specific parameter)
                 maxStorage = (G_loc_wetland[cellNumber - 1] / 100.0)
                              * geo.areaOfCell(cellNumber) * G_wetlDepthActive[cellNumber - 1];
                 return G_locWetlStorage[cellNumber - 1] / maxStorage;
             }
         }
         case 3: {
-///			if (G_glo_lake[cellNumber - 1] <= 0)
-            if (G_lake_area[cellNumber - 1] <= 0) // ET: for new reservoir algorithm
+            if (G_lake_area[cellNumber - 1] <= 0)
                 return -9999;
             else {
-
-///				maxStorage = (G_glo_lake[cellNumber - 1] / 100.0)
-///					* geo.areaOfCell(cellNumber) * lakeDepth;
-                // Cell-specific active lake depth - Use array (initialized from cell-specific parameter)  // FP
+                // Cell-specific active lake depth - Use array (initialized from cell-specific parameter)
                 maxStorage = G_lake_area[cellNumber - 1] * G_lakeDepthActive[cellNumber - 1];
 
                 return G_gloLakeStorage[cellNumber - 1] / maxStorage;
@@ -5643,19 +5775,17 @@ double routingClass::getActualStorageRatio(int cellNumber, short selection) {
             if (G_glo_wetland[cellNumber - 1] <= 0)
                 return -9999;
             else {
-                // Cell-specific active wetland depth - Use array (initialized from cell-specific parameter)  // FP
+                // Cell-specific active wetland depth - Use array (initialized from cell-specific parameter)
                 maxStorage = (G_glo_wetland[cellNumber - 1] / 100.0)
                              * geo.areaOfCell(cellNumber) * G_wetlDepthActive[cellNumber - 1];
                 return G_gloWetlStorage[cellNumber - 1] / maxStorage;
             }
         }
-            // for new reservoir algorithm
         case 5: {
             if (G_reservoir_area[cellNumber - 1] <= 0)
                 return -9999;
             else {
-
-                maxStorage = G_stor_cap[cellNumber - 1] * 0.85; //85 % of storage capacity (from published volume data)
+                maxStorage = G_stor_cap[cellNumber - 1];
 
                 return G_gloResStorage[cellNumber - 1] / maxStorage;
             }
@@ -5666,39 +5796,26 @@ double routingClass::getActualStorageRatio(int cellNumber, short selection) {
             return -9999;
     }
 }
-// end getActualStorageRatio
 
 
-// FP20161018N002 Reservoir operation start years
-double routingClass::writeAnnualReservoirCapacityandLandStorageChange(char *outputDir, const short year) {
+// Reservoir operation start years
+void routingClass::writeAnnualReservoirCapacityandLandStorageChange(const std::string outputDirectory, const short year) {
 
-    extern optionClass options;
 
-    char filename[250];
 
     // Reservoir capacity of current year
     if (options.outResCapacity) {
-        int n;
-        float G_array[ng];
-        for (n = 0; n < ng; n++)
-            G_array[n] = (float) G_actualStorageCapacity[n];
-        sprintf(filename, "%s/G_RESERVOIR_STORAGE_CAPACITY_km3_%d.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng, &G_array[0]);
+        G_actualStorageCapacity.write(outputDirectory + "/G_RESERVOIR_STORAGE_CAPACITY_km3_" + std::to_string(year) + ".UNF0");
     }
-    // end if option
 
     // Land storage change
     if (options.outLandStorageChange) {
 
-        int n;
-        float G_array[ng];
+        Grid<float> G_array;
+        G_landStorageChange.write(outputDirectory + "/G_LAND_STORAGE_CHANGE_km3_" + std::to_string(year) + ".UNF0");
 
-        for (n = 0; n < ng; n++)
-            G_array[n] = (float) G_landStorageChange[n];
-        sprintf(filename, "%s/G_LAND_STORAGE_CHANGE_km3_%d.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng, &G_array[0]);
-
-        for (n = 0; n < ng; n++) { // for output in mm
+        for (int n = 0; n < ng; n++) {
+            // for output in mm
             if (geo.G_contfreq[n] == 0) {
                 G_array[n] = 0.;
             } else {
@@ -5706,39 +5823,29 @@ double routingClass::writeAnnualReservoirCapacityandLandStorageChange(char *outp
                              / (geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) * 1000000;
             }
         }
-        // endfor loop over grid cells
-        sprintf(filename, "%s/G_LAND_STORAGE_CHANGE_mm_%d.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng, &G_array[0]);
+        G_array.write(outputDirectory + "/G_LAND_STORAGE_CHANGE_mm_" + std::to_string(year) + ".UNF0");
+
         //Now, set back G_landStorageChange to 0 (to avoid that this value occurs now in each year)
-        for (n = 0; n < ng; n++) {
-            if (G_landStorageChange[n] != 0.)
-                G_landStorageChange[n] = 0.;
-        }
-
+        G_landStorageChange.fill(0.);
     }
-    // end if option
-
 }
-// end writeAnnualReservoirCapacityandLandStorageChange
 
-
-void
-routingClass::storeSingleCellDailyValuesToFile(const short year)   // HMS 2013-11-21 Storage of single cell values begin
+void routingClass::storeSingleCellDailyValuesToFile(const short year)
 {
-    //extern cbasinClass cbasin;
+    // Storage of single cell values
 
     // store daily values of single cells defined in SINGLECELLS.DAT
     FILE *file_ptr;
     char filename[250];
-    extern optionClass options;
-    extern dailyWaterBalanceClass dailyWaterBalance;
+//    extern optionClass options;
+//    extern dailyWaterBalanceClass dailyWaterBalance;
     int actualSingleCellNumber;
     short calibcounter = calibGamma.getCallCounter();
 
 
     for (short i = 0; i < options.numberOfSingleCells; ++i) {
         actualSingleCellNumber = options.cellnr[i] - 1;
-        sprintf(filename, "%s/SINGLE_CELL_DAILY_VALUES_%d_%d.%s", options.output_dir, year, calibcounter,
+        sprintf(filename, "%s/SINGLE_CELL_DAILY_VALUES_%d_%d.%s", options.output_dir.c_str(), year, calibcounter,
                 options.cellname[i]);
         file_ptr = fopen(filename, "w");
         fprintf(file_ptr, "# Daily values of single cell '%s':\n", options.cellname[i]);
@@ -5797,152 +5904,120 @@ routingClass::storeSingleCellDailyValuesToFile(const short year)   // HMS 2013-1
         for (short day = 0; day <= 364; day++) {
             fprintf(file_ptr, "%3d\t", day + 1);
 
-//CR 2015-09 TEST Optionen 19, 20, 28
-// CR ###################################################################################################
-//			fprintf(file_ptr, "%10.6f\t", G_daily365ActualUse[actualSingleCellNumber][day]);
-//			fprintf(file_ptr, "%10.6f\t", G_daily365AllocUse[actualSingleCellNumber][day]);
-//			fprintf(file_ptr, "%10.6f\t", G_daily365AllocUseNextDay[actualSingleCellNumber][day]);
-//			fprintf(file_ptr, "%10.6f\t", G_daily365TotalUnsatUse[actualSingleCellNumber][day]);
-//			fprintf(file_ptr, "%10.6f\t", G_daily365UnsatAllocUseNextDay[actualSingleCellNumber][day]);
-// CR ###################################################################################################
-
             if (options.scoutTemp)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365TempC[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365TempC(actualSingleCellNumber,day));
             if (options.scoutExtRad)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365ExtRad[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365ExtRad(actualSingleCellNumber,day));
             if (options.scoutShortDownRad)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365ShortDownRad[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365ShortDownRad(actualSingleCellNumber,day));
             if (options.scoutAlbedo)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365Albedo[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365Albedo(actualSingleCellNumber,day));
             if (options.scoutShortUpRad)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365ShortUpRad[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365ShortUpRad(actualSingleCellNumber,day));
             if (options.scoutNetShortRad)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365NetShortRad[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365NetShortRad(actualSingleCellNumber,day));
             if (options.scoutLongDownRad)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365LongDownRad[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365LongDownRad(actualSingleCellNumber,day));
             if (options.scoutLongUpRad)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365LongUpRad[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365LongUpRad(actualSingleCellNumber,day));
             if (options.scoutNetLongRad)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365NetLongRad[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365NetLongRad(actualSingleCellNumber,day));
             if (options.scoutNetRad)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365NetRadiation[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365NetRadiation(actualSingleCellNumber,day));
             if (options.scoutLAI)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365LAI[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365LAI(actualSingleCellNumber,day));
             if (options.scoutKc)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365Kc[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365Kc(actualSingleCellNumber,day));
             if (options.scoutLandPET)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365PET[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365PET(actualSingleCellNumber,day));
             if (options.scoutCellPET)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365TotalPET[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365TotalPET(actualSingleCellNumber,day));
             if (options.scoutPrecip)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365Precip[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365Precip(actualSingleCellNumber,day));
             if (options.scoutcPrecip)
-                fprintf(file_ptr, "%10.6f\t", G_daily365ConsistentPrecip[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", G_daily365ConsistentPrecip(actualSingleCellNumber,day));
             if (options.scoutCanopyWater)
                 fprintf(file_ptr, "%10.6f\t",
-                        dailyWaterBalance.G_daily365canopyWaterContent[actualSingleCellNumber][day]);
+                        dailyWaterBalance.G_daily365canopyWaterContent(actualSingleCellNumber,day));
             if (options.scoutmaxCanopyWater)
                 fprintf(file_ptr, "%10.6f\t",
-                        dailyWaterBalance.G_daily365maxcanopyWaterContent[actualSingleCellNumber][day]);
+                        dailyWaterBalance.G_daily365maxcanopyWaterContent(actualSingleCellNumber,day));
             if (options.scoutInterception)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365Interception[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365Interception(actualSingleCellNumber,day));
             if (options.scoutSnowfall)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365SnowFall[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365SnowFall(actualSingleCellNumber,day));
             if (options.scoutSnowCov)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365SnowCoverAvg[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365SnowCoverAvg(actualSingleCellNumber,day));
             if (options.scoutSnowmelt)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365SnowMelt[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365SnowMelt(actualSingleCellNumber,day));
             if (options.scoutSnowWater)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365SWE[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365SWE(actualSingleCellNumber,day));
             if (options.scoutSoilWater)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365SoilWaterAvg[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365SoilWaterAvg(actualSingleCellNumber,day));
             if (options.scoutSurfaceRunoff)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365SurfaceRunoff[actualSingleCellNumber][day]);
-            if (options.scoutGwRunoff) fprintf(file_ptr, "%10.6f\t", G_daily365GwRunoff[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365SurfaceRunoff(actualSingleCellNumber,day));
+            if (options.scoutGwRunoff) fprintf(file_ptr, "%10.6f\t", G_daily365GwRunoff(actualSingleCellNumber,day));
             if (options.scoutGwRecharge)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365GwRecharge[actualSingleCellNumber][day]);
-            if (options.scoutCellAET) fprintf(file_ptr, "%10.6f\t", G_daily365CellAET[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365GwRecharge(actualSingleCellNumber,day));
+            if (options.scoutCellAET) fprintf(file_ptr, "%10.6f\t", G_daily365CellAET(actualSingleCellNumber,day));
             if (options.scoutCellRunoffkm3)
-                fprintf(file_ptr, "%10.6f\t", G_daily365CellRunoff[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", G_daily365CellRunoff(actualSingleCellNumber,day));
             if (options.scoutCellRunoffmm)
-                fprintf(file_ptr, "%10.6f\t", G_daily365CellRunoff_mm[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", G_daily365CellRunoff_mm(actualSingleCellNumber,day));
             if (options.scoutCellSRunoff)
-                fprintf(file_ptr, "%10.6f\t", G_daily365CellSurfaceRunoff[actualSingleCellNumber][day]);
-            if (options.scoutQ) fprintf(file_ptr, "%10.6f\t", G_daily365RiverAvail[actualSingleCellNumber][day]);
-            if (options.scoutFlowVelo) fprintf(file_ptr, "%10.6f\t", G_daily365Velocity[actualSingleCellNumber][day]);
-            if (options.scoutLocLake) fprintf(file_ptr, "%10.6f\t", G_daily365LocLakeStor[actualSingleCellNumber][day]);
-            if (options.scoutLocWet) fprintf(file_ptr, "%10.6f\t", G_daily365LocWetlStor[actualSingleCellNumber][day]);
-            if (options.scoutGloLake) fprintf(file_ptr, "%10.6f\t", G_daily365GloLakeStor[actualSingleCellNumber][day]);
-            if (options.scoutReservoir) fprintf(file_ptr, "%10.6f\t", G_daily365ResStor[actualSingleCellNumber][day]);
-            if (options.scoutGloWet) fprintf(file_ptr, "%10.6f\t", G_daily365GloWetlStor[actualSingleCellNumber][day]);
-            if (options.scoutRiver) fprintf(file_ptr, "%10.6f\t", G_daily365RiverStor[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", G_daily365CellSurfaceRunoff(actualSingleCellNumber,day));
+            if (options.scoutQ) fprintf(file_ptr, "%10.6f\t", G_daily365RiverAvail(actualSingleCellNumber,day));
+            if (options.scoutFlowVelo) fprintf(file_ptr, "%10.6f\t", G_daily365Velocity(actualSingleCellNumber,day));
+            if (options.scoutLocLake) fprintf(file_ptr, "%10.6f\t", G_daily365LocLakeStor(actualSingleCellNumber,day));
+            if (options.scoutLocWet) fprintf(file_ptr, "%10.6f\t", G_daily365LocWetlStor(actualSingleCellNumber,day));
+            if (options.scoutGloLake) fprintf(file_ptr, "%10.6f\t", G_daily365GloLakeStor(actualSingleCellNumber,day));
+            if (options.scoutReservoir) fprintf(file_ptr, "%10.6f\t", G_daily365ResStor(actualSingleCellNumber,day));
+            if (options.scoutGloWet) fprintf(file_ptr, "%10.6f\t", G_daily365GloWetlStor(actualSingleCellNumber,day));
+            if (options.scoutRiver) fprintf(file_ptr, "%10.6f\t", G_daily365RiverStor(actualSingleCellNumber,day));
             if (options.scoutSurfaceStor)
-                fprintf(file_ptr, "%10.6f\t", G_daily365SurfStor[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", G_daily365SurfStor(actualSingleCellNumber,day));
             if (options.scoutTWSkm3)
-                fprintf(file_ptr, "%10.6f\t", G_daily365TotalWaterInStorages_km3[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", G_daily365TotalWaterInStorages_km3(actualSingleCellNumber,day));
             if (options.scoutTWSmm)
-                fprintf(file_ptr, "%10.6f\t", G_daily365TotalWaterInStorages_mm[actualSingleCellNumber][day]);
-            if (options.scoutGwStor) fprintf(file_ptr, "%10.6f\t", G_daily365GwStor[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", G_daily365TotalWaterInStorages_mm(actualSingleCellNumber,day));
+            if (options.scoutGwStor) fprintf(file_ptr, "%10.6f\t", G_daily365GwStor(actualSingleCellNumber,day));
             if (options.scoutCanopyStor)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365CanopyStorage[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365CanopyStorage(actualSingleCellNumber,day));
             if (options.scoutSnowStor)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365SnowStorage[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365SnowStorage(actualSingleCellNumber,day));
             if (options.scoutSoilStor)
-                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365SoilStorage[actualSingleCellNumber][day]);
-            if (options.scoutGwrSwb) fprintf(file_ptr, "%10.6f\t", G_daily365GwrSwb[actualSingleCellNumber][day]);
-            if (options.scoutFswb) fprintf(file_ptr, "%10.6f\t", G_daily365Fswb[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", dailyWaterBalance.G_daily365SoilStorage(actualSingleCellNumber,day));
+            if (options.scoutGwrSwb) fprintf(file_ptr, "%10.6f\t", G_daily365GwrSwb(actualSingleCellNumber,day));
+            if (options.scoutFswb) fprintf(file_ptr, "%10.6f\t", G_daily365Fswb(actualSingleCellNumber,day));
             if (options.scoutLandAreaFrac)
-                fprintf(file_ptr, "%10.6f\t", G_daily365LandAreaFrac[actualSingleCellNumber][day]);
+                fprintf(file_ptr, "%10.6f\t", G_daily365LandAreaFrac(actualSingleCellNumber,day));
             fprintf(file_ptr, "%3d\n", day + 1);
         }
         fclose(file_ptr);
     }
 }
-// end storeSingleCellDailyValuesToFile
-// HMS 2013-11-21 Storage of single cell values end
 
-void routingClass::writeLakeStorageGrids(char *outputDir, int year) {
+void routingClass::writeLakeStorageGrids(const std::string outputDirectory, int year) {
+
     // values in [km3]  // yearly outputs (1 == options.grid_store)
-    char filename[250];
-    int n;
-    double G_array[ng];
 
-    for (n = 0; n < ng; n++)
-        G_array[n] = G_locLakeStorage[n]; // conversion double -> float
-    sprintf(filename, "%s/G_LOC_LAKE_STORAGE_km3_%d.UNF0", outputDir, year);
-    gridIO.writeUnfFile(filename, ng, &G_array[0]);
+    G_locLakeStorage.write(outputDirectory + "/G_LOC_LAKE_STORAGE_km3_" + std::to_string(year) + ".UNF0");
 
-    for (n = 0; n < ng; n++)
-        G_array[n] = G_locWetlStorage[n]; // conversion double -> float
-    sprintf(filename, "%s/G_LOC_WETL_STORAGE_km3_%d.UNF0", outputDir, year);
-    gridIO.writeUnfFile(filename, ng, &G_array[0]);
+    G_locWetlStorage.write(outputDirectory + "/G_LOC_WETL_STORAGE_km3_" + std::to_string(year) + ".UNF0");
 
-    for (n = 0; n < ng; n++)
-        G_array[n] = G_gloLakeStorage[n]; // conversion double -> float
-    sprintf(filename, "%s/G_GLO_LAKE_STORAGE_km3_%d.UNF0", outputDir, year);
-    gridIO.writeUnfFile(filename, ng, &G_array[0]);
+    G_gloLakeStorage.write(outputDirectory + "/G_GLO_LAKE_STORAGE_km3_" + std::to_string(year) + ".UNF0");
 
-    for (n = 0; n < ng; n++)
-        G_array[n] = G_gloWetlStorage[n]; // conversion double -> float
-    sprintf(filename, "%s/G_GLO_WETL_STORAGE_km3_%d.UNF0", outputDir, year);
-    gridIO.writeUnfFile(filename, ng, &G_array[0]);
+    G_gloWetlStorage.write(outputDirectory + "/G_GLO_WETL_STORAGE_km3_" + std::to_string(year) + ".UNF0");
 
-    // for new reservoir algorithm
     if (options.resOpt == 1) {
-        for (n = 0; n < ng; n++)
-            G_array[n] = G_gloResStorage[n]; // conversion double -> float
-        sprintf(filename, "%s/G_RES_STORAGE_km3_%d.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng, &G_array[0]);
+        G_gloResStorage.write(outputDirectory + "/G_RES_STORAGE_km3_" + std::to_string(year) + ".UNF0");
     }
-
-
 }
-// end writeLakeStorageGrids
 
-void routingClass::writeLakeStorRatioGrids(char *outputDir, int year) {
-    // range of values: 1 is maximum   // yearly outputs (1 == options.grid_store)
-    char filename[250];
-    float G_storageRatio[ng];
+void routingClass::writeLakeStorRatioGrids(const std::string outputDirectory, int year) {
+    // range of values: 1 is maximum, yearly outputs (1 == options.grid_store)
+
+    Grid<float> G_storageRatio;
     int n;
 
     // local lakes
@@ -5951,1068 +6026,844 @@ void routingClass::writeLakeStorRatioGrids(char *outputDir, int year) {
                                                    * geo.areaOfCellByArrayPos(n) * G_lakeDepthActive[n]);
         // term in brackets is equal to maxStorage
     }
-    sprintf(filename, "%s/G_LOC_LAKE_STOR_RATIO_%d.UNF0", outputDir, year);
-    gridIO.writeUnfFile(filename, ng, G_storageRatio);
+    G_storageRatio.write(outputDirectory + "/G_LOC_LAKE_STOR_RATIO_" + std::to_string(year) + ".UNF0");
 
     // local wetlands
     for (int n = 0; n <= ng - 1; n++) {
-        // Cell-specific active wetland depth - Use array (initialized from cell-specific parameter)  // FP
+        // Cell-specific active wetland depth - Use array (initialized from cell-specific parameter)
         G_storageRatio[n] = G_locWetlStorage[n] / ((G_loc_wetland[n] / 100.0)
                                                    * geo.areaOfCellByArrayPos(n) * G_wetlDepthActive[n]);
     }
-    sprintf(filename, "%s/G_LOC_WETL_STOR_RATIO_%d.UNF0", outputDir, year);
-    gridIO.writeUnfFile(filename, ng, G_storageRatio);
+    G_storageRatio.write(outputDirectory + "/G_LOC_WETL_STOR_RATIO_" + std::to_string(year) + ".UNF0");
 
     // global lakes
     for (int n = 0; n <= ng - 1; n++) {
         G_storageRatio[n] = G_gloLakeStorage[n]
-                            // for new reservoir algorithm			/ ((G_lake_area[n] + G_reservoir_area[n])* lakeDepth);
-                            // Cell-specific active lake depth - Use array (initialized from cell-specific parameter)  // FP
+                            // Cell-specific active lake depth - Use array (initialized from cell-specific parameter)
                             / ((double) G_lake_area[n] * G_lakeDepthActive[n]);
 
-        ///		G_storageRatio[n] = G_gloLakeStorage[n]
-        ///			/ ((G_glo_lake[n] / 100.0)
-        ///			   * geo.areaOfCellByArrayPos(n) * lakeDepth);
 
     }
-    sprintf(filename, "%s/G_GLO_LAKE_STOR_RATIO_%d.UNF0", outputDir, year);
-    gridIO.writeUnfFile(filename, ng, G_storageRatio);
+    G_storageRatio.write(outputDirectory + "/G_GLO_LAKE_STOR_RATIO_" + std::to_string(year) + ".UNF0");
 
     // global wetlands
     for (int n = 0; n <= ng - 1; n++) {
-        // Cell-specific active wetland depth - Use array (initialized from cell-specific parameter)  // FP
+        // Cell-specific active wetland depth - Use array (initialized from cell-specific parameter)
         G_storageRatio[n] = G_gloWetlStorage[n] / ((G_glo_wetland[n] / 100.0)
                                                    * geo.areaOfCellByArrayPos(n) * G_wetlDepthActive[n]);
     }
-    sprintf(filename, "%s/G_GLO_WETL_STOR_RATIO_%d.UNF0", outputDir, year);
-    gridIO.writeUnfFile(filename, ng, G_storageRatio);
+    G_storageRatio.write(outputDirectory + "/G_GLO_WETL_STOR_RATIO_" + std::to_string(year) + ".UNF0");
 
-    // for new reservoir algorithm
     // reservoirs
     if (options.resOpt == 1) {
         for (int n = 0; n <= ng - 1; n++) {
-            G_storageRatio[n] = G_gloResStorage[n] /
-                                (G_stor_cap[n] * 0.85); //85 % of storage capacity (from published volume data)
+            G_storageRatio[n] = G_gloResStorage[n] / G_stor_cap[n];
         }
-        sprintf(filename, "%s/G_RES_STOR_RATIO_%d.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng, G_storageRatio);
+        G_storageRatio.write(outputDirectory + "/G_RES_STOR_RATIO_" + std::to_string(year) + ".UNF0");
     }
 }
-// end writeLakeStorRatioGrids
 
-void routingClass::writeMonthlyGrids(char *outputDir, int year) {
-    if (2 != options.grid_store && 4 != options.grid_store && 6 != options.grid_store) return;
+void routingClass::writeMonthlyGrids(const std::string outputDirectory, int year, int month2store) {
+    if (2 != options.grid_store && 4 != options.grid_store && 6 != options.grid_store)
+        return;
 
-    char filename[250];
     int n;
-    short m;
-    double G_monthlyArray[ng][12]; // used to write float array to file
-    double numberOfDaysInMonth[12] = {31., 28., 31., 30., 31., 30., 31., 31., 30., 31., 30., 31.};
+    short month;
+    MonthlyGrid<> G_monthlyArray;
+    int numberOfDaysInMonth[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 
-    if (options.outRiverAvail) { // new output options 2.1f
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyRiverAvail[n][m]; // conversion double -> float
-        sprintf(filename, "%s/G_RIVER_AVAIL_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+    if (options.outRiverAvail) {
+        G_monthlyRiverAvail.write(outputDirectory + "/G_RIVER_AVAIL_" + std::to_string(year) + ".12.UNF0");
     }
-    // endif options.outRiverAvail
 
-    if (options.outPrec) { // new output options 2.2 Precip which is really used by WaterGAP
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyConsistentPrecip[n][m];
-        sprintf(filename, "%s/G_CONSISTENT_PRECIPITATION_km3_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+    if (options.outPrec) {
+        //  Precip which is really used by WaterGAP
+        G_monthlyConsistentPrecip.write(outputDirectory + "/G_CONSISTENT_PRECIPITATION_km3_" + std::to_string(year) + ".12.UNF0");
     }
-    // endif options.outPrec
 
-    //new output option min/max daily discharge
+    // output option min/max daily discharge
     if (options.outMinMaxRiverAvail) {
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyMinRiverAvail[n][m]; // conversion double -> float
-        sprintf(filename, "%s/G_MIN_RIVER_AVAIL_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+        G_monthlyMinRiverAvail.write(outputDirectory + "/G_MIN_RIVER_AVAIL_" + std::to_string(year) + ".12.UNF0");
 
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyMaxRiverAvail[n][m]; // conversion double -> float
-        sprintf(filename, "%s/G_MAX_RIVER_AVAIL_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+        G_monthlyMaxRiverAvail.write(outputDirectory + "/G_MAX_RIVER_AVAIL_" + std::to_string(year) + ".12.UNF0");
     }
-    // endif options.outMinMaxRiverAvail
 
     if (options.outRiverPET) {
         for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] =
-                               G_monthlyRiverAreaFrac[n][m] / numberOfDaysInMonth[m]; // conversion double -> float
-        sprintf(filename, "%s/G_RIVER_FRACTIONS_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+            for (month = 0; month < 12; month++)
+                G_monthlyArray(n,month) = G_monthlyRiverAreaFrac(n,month) / numberOfDaysInMonth[month];
 
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyRiverPET[n][m]; // conversion double -> float
-        sprintf(filename, "%s/G_RIVER_PET_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+        G_monthlyArray.write(outputDirectory + "/G_RIVER_FRACTIONS_" + std::to_string(year) + ".12.UNF0");
+
+        G_monthlyRiverPET.write(outputDirectory + "/G_RIVER_PET_" + std::to_string(year) + ".12.UNF0");
 
     }
-    // endif options.outRiverPET
 
-    if (options.outRiverInUpstream) { // new output options 2.2
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyRiverInUpstream[n][m]; // conversion double -> float
-        sprintf(filename, "%s/G_RIVER_IN_UPSTREAM_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+    if (options.outRiverInUpstream) {
+        G_monthlyRiverInUpstream.write(outputDirectory + "/G_RIVER_IN_UPSTREAM_" + std::to_string(year) + ".12.UNF0");
     }
-    // endif options.outRiverInUpstream
 
-    if (options.outRiverVelo) { // new output options 2.2
+    if (options.outRiverVelo) {
         for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyVelocity[n][m] / numberOfDaysInMonth[m]; // conversion double -> float
-        sprintf(filename, "%s/G_RIVER_VELOCITY_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+            for (month = 0; month < 12; month++)
+                G_monthlyArray(n,month) = G_monthlyVelocity(n,month) / numberOfDaysInMonth[month];
+
+        G_monthlyArray.write(outputDirectory + "/G_RIVER_VELOCITY_" + std::to_string(year) + ".12.UNF0");
     }
-    // endif options.outCellSurface
 
     if (options.outLocWetlExt) {
         for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyLocWetlExtent[n][m] / numberOfDaysInMonth[m];
-        sprintf(filename, "%s/G_LOC_WETL_EXTENT_km2_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+            for (month = 0; month < 12; month++)
+                G_monthlyArray(n,month) = G_monthlyLocWetlExtent(n,month) / numberOfDaysInMonth[month];
+
+        G_monthlyArray.write(outputDirectory + "/G_LOC_WETL_EXTENT_km2_" + std::to_string(year) + ".12.UNF0");
     }
     if (options.outGloWetlExt) {
         for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyGloWetlExtent[n][m] / numberOfDaysInMonth[m];
-        sprintf(filename, "%s/G_GLO_WETL_EXTENT_km2_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+            for (month = 0; month < 12; month++)
+                G_monthlyArray(n,month) = G_monthlyGloWetlExtent(n,month) / numberOfDaysInMonth[month];
+
+        G_monthlyArray.write(outputDirectory + "/G_GLO_WETL_EXTENT_km2_" + std::to_string(year) + ".12.UNF0");
     }
-    if (options.outCellRunoff) { // new output options 2.2
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyCellRunoff[n][m]; // conversion double -> float
-        sprintf(filename, "%s/G_CELL_RUNOFF_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+    if (options.outCellRunoff) {
+
+        G_monthlyCellRunoff.write(outputDirectory + "/G_CELL_RUNOFF_" + std::to_string(year) + ".12.UNF0");
 
         for (n = 0; n < ng; n++) { // total water resources in mm/month
-            for (m = 0; m < 12; m++) {
-                // FP 2015-06 // Only continental cells
+            for (month = 0; month < 12; month++) {
+                // Only continental cells
                 if (geo.G_contcell[n]) {
-                    G_monthlyArray[n][m] = G_monthlyCellRunoff[n][m] // conversion double -> float
+                    G_monthlyArray(n,month) = G_monthlyCellRunoff(n,month)
                                            / (geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) * 1000000;
                 }
-                    // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
+                // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0.
+                // The water balance is calculated in the outlet cell of large lakes; therefore a calculation of
+                // e.g. precipitation for this cells leads to inconsistent quantification of global fluxes.
+                // A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                 else {
-                    G_monthlyArray[n][m] = 0.;
+                    G_monthlyArray(n,month) = 0.;
                 }
             }
-            //endfor loop over months
         }
-        // endfor loop over grid cells
-        sprintf(filename, "%s/G_CELL_RUNOFF_mm_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
 
-        //if (options.outCellRunoffTotal) { // new output options 2.2b to be implemented as output option
-        // dynamic memory allocation
-        // static allocation has lead to 'segmentation fault'
-        double (*const G_totalCellRunoff)[12] = new double[ng][12];
+        G_monthlyArray.write(outputDirectory + "/G_CELL_RUNOFF_mm_" + std::to_string(year) + ".12.UNF0");
+
         for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++) {
-                G_monthlyPotCellRunoff[n][m] -= G_monthlyPotCellRunoffDeficit[n][m];    // contains negative values
-                G_monthlyArray[n][m] = G_monthlyPotCellRunoff[n][m]; // conversion double -> float
-            }
-        sprintf(filename, "%s/G_CELL_RUNOFF_TOTAL_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
-        delete[]G_totalCellRunoff;
-        //}
+            for (month = 0; month < 12; month++)
+                G_monthlyPotCellRunoff(n,month) -= G_monthlyPotCellRunoffDeficit(n,month);    // contains negative values
 
+        G_monthlyPotCellRunoff.write(outputDirectory + "/G_CELL_RUNOFF_TOTAL_" + std::to_string(year) + ".12.UNF0");
     }
-    // endif options.outCellRunoff
 
-    if (options.outCellSurface) { // new output options 2.2
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyCellSurfaceRunoff[n][m]; // conversion double -> float
-        sprintf(filename, "%s/G_CELL_SURFACE_RUNOFF_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+    if (options.outGwrunSurfrun) {
+        G_monthlyGwrunSurfrun.write(outputDirectory + "/G_GWRUN_SURFRUN_km3_" + to_string(year) + ".12.UNF0");
     }
-    // endif options.outCellSurface
 
-    if (options.outSurfStor) { // new output options 2.2
+    if (options.outCellSurface) {
+        G_monthlyCellSurfaceRunoff.write(outputDirectory + "/G_CELL_SURFACE_RUNOFF_" + std::to_string(year) + ".12.UNF0");
+    }
+
+    if (options.outSurfStor) {
 
         if (options.grid_store_TypeForStorages == 0) {
 
-            for (n = 0; n < ng; n++)
-                for (m = 0; m < 12; m++)
-                    G_monthlyArray[n][m] = G_monthlySurfStor[n][m]; // / numberOfDaysInMonth[m]; // conversion double -> float
-            sprintf(filename, "%s/G_SURFACE_WATER_STORAGE_km3_%d.12.UNF0", outputDir, year);
-            gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+            G_monthlySurfStor.write(outputDirectory + "/G_SURFACE_WATER_STORAGE_km3_" + std::to_string(year) + ".12.UNF0");
 
             for (n = 0; n < ng; n++) {
-                for (m = 0; m < 12; m++) {
-                    // FP 2015-06 // Only continental cells
+                for (month = 0; month < 12; month++) {
+                    // Only continental cells
                     if (geo.G_contcell[n]) {
-                        G_monthlyArray[n][m] =
-                                       (G_monthlySurfStor[n][m]// / numberOfDaysInMonth[m]; // conversion double -> float
+                        G_monthlyArray(n,month) =
+                                       (G_monthlySurfStor(n,month)
                                         / (geo.areaOfCellByArrayPos(n) * geo.G_contfreq[n] / 100.)) * 1000000;
                     }
-                        // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
+                        // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0.
+                        // The water balance is calculated in the outlet cell of large lakes; therefore a calculation of
+                        // e.g. precipitation for this cells leads to inconsistent quantification of global fluxes.
+                        // A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                     else {
-                        G_monthlyArray[n][m] = 0.;
+                        G_monthlyArray(n,month) = 0.;
                     }
                 }
-                //endfor loop over months
             }
-            // endfor loop over grid cells
-            sprintf(filename, "%s/G_SURFACE_WATER_STORAGE_mm_%d.12.UNF0", outputDir, year);
-            gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
-
+            G_monthlyArray.write(outputDirectory + "/G_SURFACE_WATER_STORAGE_mm_" + std::to_string(year) + ".12.UNF0");
         }
-            // endif (options.grid_store_TypeForStorages == 0)
         else {
             for (n = 0; n < ng; n++)
-                for (m = 0; m < 12; m++)
-                    G_monthlyArray[n][m] =
-                                   G_monthlySurfStor[n][m] / numberOfDaysInMonth[m]; // conversion double -> float
-            sprintf(filename, "%s/G_SURFACE_WATER_STORAGE_MEAN_km3_%d.12.UNF0", outputDir, year);
-            gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+                for (month = 0; month < 12; month++)
+                    G_monthlyArray(n,month) = G_monthlySurfStor(n,month) / numberOfDaysInMonth[month];
+
+            G_monthlyArray.write(outputDirectory + "/G_SURFACE_WATER_STORAGE_MEAN_km3_" + std::to_string(year) + ".12.UNF0");
 
             for (n = 0; n < ng; n++) {
-                for (m = 0; m < 12; m++) {
-                    // FP 2015-06 // Only continental cells
+                for (month = 0; month < 12; month++) {
+                    // Only continental cells
                     if (geo.G_contcell[n]) {
-                        G_monthlyArray[n][m] =
-                                       (G_monthlySurfStor[n][m] / numberOfDaysInMonth[m] // conversion double -> float
+                        G_monthlyArray(n,month) =
+                                       (G_monthlySurfStor(n,month) / numberOfDaysInMonth[month]
                                         / (geo.areaOfCellByArrayPos(n) * geo.G_contfreq[n] / 100.)) * 1000000;
                     }
-                        // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
+                    // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0.
+                    // The water balance is calculated in the outlet cell of large lakes; therefore a calculation of
+                    // e.g. precipitation for this cells leads to inconsistent quantification of global fluxes.
+                    // A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                     else {
-                        G_monthlyArray[n][m] = 0.;
+                        G_monthlyArray(n,month) = 0.;
                     }
                 }
-                //endfor loop over months
             }
-            // endfor loop over grid cells
-            sprintf(filename, "%s/G_SURFACE_WATER_STORAGE_MEAN_mm_%d.12.UNF0", outputDir, year);
-            gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
-
+            G_monthlyArray.write(outputDirectory + "/G_SURFACE_WATER_STORAGE_MEAN_mm_" + std::to_string(year) + ".12.UNF0");
         }
-        // endelse (i.e. options.grid_store_TypeForStorages != 0)
 
     }
-    // endif options.outSurfStor
 
-    if (options.outCellAET) { // new output options 2.1f
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyCellAET[n][m]; // conversion double -> float
-        sprintf(filename, "%s/G_CELL_AET_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
-
+    if (options.outCellAET) {
+        G_monthlyCellAET.write(outputDirectory + "/G_CELL_AET_" + std::to_string(year) + ".12.UNF0");
     }
-    // endif options.outCellAET
 
-
-    if (options.outOpenWaterEvap) { // new output options 2.2
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyOpenWaterEvap[n][m]; // conversion double -> float
-        sprintf(filename, "%s/G_OPEN_WATER_EVAP_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
-
+    if (options.outOpenWaterEvap) {
+        G_monthlyOpenWaterEvap.write(outputDirectory + "/G_OPEN_WATER_EVAP_" + std::to_string(year) + ".12.UNF0");
     }
-    // endif options.outOpenWaterEvap
 
-    if (options.outGwrSwb) { // monthly sum of groundwater recharge below surface water bodies (with respect to continental area) [mm/month]
+    if (options.outGwrSwb) {
+
+        // monthly sum of groundwater recharge below surface water bodies (with respect to continental area) [mm/month]
         for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyGwrSwb[n][m];
-        sprintf(filename, "%s/G_GWR_SURFACE_WATER_BODIES_mm_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+            for (month = 0; month < 12; month++)
+                G_monthlyArray(n,month) = G_monthlyGwrSwb(n,month);
+
+        G_monthlyArray.write(outputDirectory + "/G_GWR_SURFACE_WATER_BODIES_mm_" + std::to_string(year) + ".12.UNF0");
 
         for (n = 0; n < ng; n++)
-            for (short m = 0; m < 12; m++) {
-                G_monthlyArray[n][m] = G_monthlyGwrSwb[n][m]
+            for (month = 0; month < 12; month++)
+                G_monthlyArray(n,month) = G_monthlyGwrSwb(n,month)
                                        * (geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) / 1000000.;
-            }
-        sprintf(filename, "%s/G_GWR_SURFACE_WATER_BODIES_km3_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+
+        G_monthlyArray.write(outputDirectory + "/G_GWR_SURFACE_WATER_BODIES_km3_" + std::to_string(year) + ".12.UNF0");
     }
-    // endif options.outGwrSwb
 
     if (options.outTotalGWR) {
         for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyGwrSwb[n][m] + dailyWaterBalance.G_monthlyGwRecharge[n][m];
-        sprintf(filename, "%s/G_TOTAL_GW_RECHARGE_mm_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+            for (month = 0; month < 12; month++)
+                G_monthlyArray(n,month) = G_monthlyGwrSwb(n,month) + dailyWaterBalance.G_monthlyGwRecharge(n,month);
+
+        G_monthlyArray.write(outputDirectory + "/G_TOTAL_GW_RECHARGE_mm_" + std::to_string(year) + ".12.UNF0");
 
         for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = (G_monthlyGwrSwb[n][m] + dailyWaterBalance.G_monthlyGwRecharge[n][m])
+            for (month = 0; month < 12; month++)
+                G_monthlyArray(n,month) = (G_monthlyGwrSwb(n,month) + dailyWaterBalance.G_monthlyGwRecharge(n,month))
                                        * (geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) / 1000000.;
-        sprintf(filename, "%s/G_TOTAL_GW_RECHARGE_km3_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+
+        G_monthlyArray.write(outputDirectory + "/G_TOTAL_GW_RECHARGE_km3_" + std::to_string(year) + ".12.UNF0");
     }
 
-    if (options.outFswb) { // mean monthly fraction of surface water bodies
+    if (options.outFswb) {
+
+        // mean monthly fraction of surface water bodies
         for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++) {
-                G_monthlyArray[n][m] = G_monthlyFswb[n][m] / numberOfDaysInMonth[m];
-            }
-        sprintf(filename, "%s/G_FRACTION_SURFACE_WATER_BODIES_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+            for (month = 0; month < 12; month++)
+                G_monthlyArray(n,month) = G_monthlyFswb(n,month) / numberOfDaysInMonth[month];
+
+        G_monthlyArray.write(outputDirectory + "/G_FRACTION_SURFACE_WATER_BODIES_" + std::to_string(year) + ".12.UNF0");
     }
-    // endif options.outFswb
+
     if (options.outLandAreaFrac) {
+
         // Write land area fractions
         for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyLandAreaFrac[n][m] / numberOfDaysInMonth[m];
-        sprintf(filename, "%s/G_LAND_AREA_FRACTIONS_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+            for (month = 0; month < 12; month++)
+                G_monthlyArray(n,month) = G_monthlyLandAreaFrac(n,month) / numberOfDaysInMonth[month];
+
+        G_monthlyArray.write(outputDirectory + "/G_LAND_AREA_FRACTIONS_" + std::to_string(year) + ".12.UNF0");
     }
 
     // GFZ:GLOLAK begin - Allocation of GloLakeStorage of Outflowcell to all Lakecells
     //for lakes and reservoirs
     if (0 != ng_glolakcells) {
 
-        float G_tempGloLakeStorage[ng_glolakcells];
-        //float G_tempResStorage[ng_glolakcells];
+        Grid<float,ng_glolakcells> G_tempGloLakeStorage;
 
         long ofcell, acell;
-        for (short month = 0; month <= 11; month++) {
+        for (month = 0; month < 12; month++) {
             //Initialisation of the temporary Glolakstorage-array
             for (n = 0; n < ng_glolakcells; n++) {
                 G_tempGloLakeStorage[n] = 0.0;
-                //G_tempResStorage[n] = 0; //added for new reservoir storage
             }
             //computation of glolakstorage for each lakecell and saving in temporary array
             for (n = 0; n < ng_glolakcells; n++) {
-                ofcell = big_lakes_cells[0][n];
-                acell = big_lakes_cells[1][n];
+                ofcell = big_lakes_cells(0,n);
+                acell = big_lakes_cells(1,n);
                 if (ofcell != -99)
-                    G_tempGloLakeStorage[n] += G_monthlyGloLakeStorage[acell - 1][month] * big_lakes_area_frac[n];
-                //G_tempResStorage[n] += 	G_monthlyResStorage[acell-1][month] * big_lakes_area_frac[n];
+                    G_tempGloLakeStorage[n] += G_monthlyGloLakeStorage(acell - 1,month) * big_lakes_area_frac[n];
             }
             //Rewriting of global array for Glolakstorage
             for (n = 0; n < ng_glolakcells; n++) {
-                ofcell = big_lakes_cells[0][n];
-                G_monthlyGloLakeStorage[ofcell - 1][month] = G_tempGloLakeStorage[n];
-                //G_monthlyResStorage[ofcell-1][month] = G_tempResStorage[n];
+                ofcell = big_lakes_cells(0,n);
+                G_monthlyGloLakeStorage(ofcell - 1,month) = G_tempGloLakeStorage[n];
             }
         }
     }
-    // endif (0 != ng_glolakcells)
-    //GFZ:GLOLAK end
 
     // monthly storage grids
     if (options.grid_store_TypeForStorages == 1) {
         for (n = 0; n <= ng - 1; n++) {
-            for (short month = 0; month <= 11; month++) {
-                G_monthlyGwStorage[n][month] /= numberOfDaysInMonth[month]; // moved from daily.cpp
-                G_monthlyLocLakeStorage[n][month] /= numberOfDaysInMonth[month];
-                G_monthlyLocWetlStorage[n][month] /= numberOfDaysInMonth[month];
-                G_monthlyGloLakeStorage[n][month] /= numberOfDaysInMonth[month];
-                G_monthlyGloWetlStorage[n][month] /= numberOfDaysInMonth[month];
-                G_monthlyRiverStorage[n][month] /= numberOfDaysInMonth[month];
+            for (month = 0; month < 12; month++) {
+                G_monthlyGwStorage(n,month) /= numberOfDaysInMonth[month];
+                G_monthlyLocLakeStorage(n,month) /= numberOfDaysInMonth[month];
+                G_monthlyLocWetlStorage(n,month) /= numberOfDaysInMonth[month];
+                G_monthlyGloLakeStorage(n,month) /= numberOfDaysInMonth[month];
+                G_monthlyGloWetlStorage(n,month) /= numberOfDaysInMonth[month];
+                G_monthlyRiverStorage(n,month) /= numberOfDaysInMonth[month];
                 if (options.resOpt == 1)
-                    G_monthlyResStorage[n][month] /= numberOfDaysInMonth[month];
+                    G_monthlyResStorage(n,month) /= numberOfDaysInMonth[month];
+                if (options.glacierOpt == 1)
+                    G_monthlyGlacierStorage(n,month) /= numberOfDaysInMonth[month];
             }
-        } //for(n)
-    } // endif options.grid_store_TypeForStorages
+        }
+    }
 
-    if (options.outGWRunoff) { // moved from daily.cpp
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyGwRunoff[n][m];
-        sprintf(filename, "%s/G_GW_RUNOFF_km3_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+    if (options.outGWRunoff) {
+
+        G_monthlyGwRunoff.write(outputDirectory + "/G_GW_RUNOFF_km3_" + std::to_string(year) + ".12.UNF0");
 
         for (n = 0; n < ng; n++) { // for output in mm
-            for (m = 0; m < 12; m++) {
-                // FP 2015-06 // Only continental cells
+            for (month = 0; month < 12; month++) {
+                // Only continental cells
                 if (geo.G_contcell[n]) {
-                    G_monthlyArray[n][m] = G_monthlyGwRunoff[n][m] // conversion double -> float
+                    G_monthlyArray(n,month) = G_monthlyGwRunoff(n,month)
                                            / (geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) * 1000000.0;
                 }
-                    // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
+                // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0.
+                // The water balance is calculated in the outlet cell of large lakes; therefore a calculation of
+                // e.g. precipitation for this cells leads to inconsistent quantification of global fluxes.
+                // A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                 else {
-                    G_monthlyArray[n][m] = 0.;
+                    G_monthlyArray(n,month) = 0.;
                 }
             }
-            //endfor loop over months
         }
-        // endfor loop over grid cells
-        sprintf(filename, "%s/G_GW_RUNOFF_mm_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+        G_monthlyArray.write(outputDirectory + "/G_GW_RUNOFF_mm_" + std::to_string(year) + ".12.UNF0");
     }
-    // endif options.outGWRunoff
+
+    if (options.outGlacArea)
+        G_monthlyGlacierArea.write(outputDirectory + "/G_GLACIER_AREA_km2_" + std::to_string(year) + ".12.UNF0");
+
+    if (options.outGlacAreaFrac)
+        G_monthlyGlacierAreaFrac.write(outputDirectory + "/G_GLACIER_AREA_FRACTION_" + std::to_string(year) + ".12.UNF0");
+
+    if (options.outGlacPrecip) {
+
+        G_monthlyGlacierPrecip.write(outputDirectory + "/G_PRECIPITATION_ON_GLACIER_km3_" + std::to_string(year) + ".12.UNF0");
+
+        for (n = 0; n < ng; n++) {
+            for (month = 0; month < 12; month++) {
+                if (geo.G_contcell[n])
+                    G_monthlyArray(n,month) = G_monthlyGlacierPrecip(n,month) / G_glacAdaptedArea[n] * 1000000.0;  // for output in mm
+                else
+                    G_monthlyArray(n,month) = 0.;
+            }
+        }
+        G_monthlyArray.write(outputDirectory + "/G_PRECIPITATION_ON_GLACIER_mm_" + std::to_string(year) + ".12.UNF0");
+    }
+
+    if (options.outGlacRunoff) {
+
+        G_monthlyGlacierRunoff.write(outputDirectory + "/G_GLACIER_RUNOFF_km3_" + std::to_string(year) + ".12.UNF0");
+
+        for (n = 0; n < ng; n++) {
+            for (month = 0; month < 12; month++) {
+                if (geo.G_contcell[n])
+                    G_monthlyArray(n,month) = G_monthlyGlacierRunoff(n,month)
+                                           / (geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) * 1000000.0;  // for output in mm
+                else
+                    G_monthlyArray(n,month) = 0.;
+            }
+        }
+        G_monthlyArray.write(outputDirectory + "/G_GLACIER_RUNOFF_mm_" + std::to_string(year) + ".12.UNF0");
+    }
+
     //write output of monthly storage (components)
 
-    if (options.outLocLakeStorage || options.outSingleStorages) { // moved from daily.cpp
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyGwStorage[n][m];
-        sprintf(filename, "%s/G_GROUND_WATER_STORAGE_km3_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+    if (options.outLocLakeStorage || options.outSingleStorages) {
 
+        G_monthlyGwStorage.write(outputDirectory + "/G_GROUND_WATER_STORAGE_km3_" + std::to_string(year) + ".12.UNF0");
 
-        for (n = 0; n < ng; n++) { // for output in mm
-            for (m = 0; m < 12; m++) {
-                // FP 2015-06 // Only continental cells
+        for (n = 0; n < ng; n++) {
+            // for output in mm
+            for (month = 0; month < 12; month++) {
+                // Only continental cells
                 if (geo.G_contcell[n]) {
-                    G_monthlyArray[n][m] =
-                                   G_monthlyGwStorage[n][m]// / numberOfDaysInMonth[m]; // conversion double -> float
+                    G_monthlyArray(n,month) =
+                                   G_monthlyGwStorage(n,month)
                                    / (geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) * 1000000.0;
                 }
-                    // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
+                // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0.
+                // The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation
+                // for this cells leads to inconsistent quantification of global fluxes.
+                // A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                 else {
-                    G_monthlyArray[n][m] = 0.;
+                    G_monthlyArray(n,month) = 0.;
                 }
             }
-            //endfor loop over months
         }
-        // endfor loop over grid cells
 
-        sprintf(filename, "%s/G_GROUND_WATER_STORAGE_mm_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
-
+        G_monthlyArray.write(outputDirectory + "/G_GROUND_WATER_STORAGE_mm_" + std::to_string(year) + ".12.UNF0");
     }
-    // endif options
-    if (options.outLocLakeStorage || options.outSingleStorages) { // neue OUTPUT-Option
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyLocLakeStorage[n][m]; // LOCAL LAKES - conversion double -> float
-        sprintf(filename, "%s/G_LOC_LAKE_STORAGE_km3_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+    if (options.outLocLakeStorage || options.outSingleStorages) {
 
-        for (n = 0; n < ng; n++) { // for output in mm
-            for (m = 0; m < 12; m++) {
-                // FP 2015-06 // Only continental cells
+        // LOCAL LAKES
+        G_monthlyLocLakeStorage.write(outputDirectory + "/G_LOC_LAKE_STORAGE_km3_" + std::to_string(year) + ".12.UNF0");
+
+        for (n = 0; n < ng; n++) {
+            // for output in mm
+            for (month = 0; month < 12; month++) {
+                // Only continental cells
                 if (geo.G_contcell[n]) {
-                    G_monthlyArray[n][m] = G_monthlyLocLakeStorage[n][m] // LOCAL LAKES - conversion double -> float
+                    G_monthlyArray(n,month) = G_monthlyLocLakeStorage(n,month)
                                            / (geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) * 1000000;
                 }
-                    // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
+                // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0.
+                // The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation
+                // for this cells leads to inconsistent quantification of global fluxes.
+                // A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                 else {
-                    G_monthlyArray[n][m] = 0.;
+                    G_monthlyArray(n,month) = 0.;
                 }
             }
-            //endfor loop over months
         }
-        // endfor loop over grid cells
-        sprintf(filename, "%s/G_LOC_LAKE_STORAGE_mm_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+        G_monthlyArray.write(outputDirectory + "/G_LOC_LAKE_STORAGE_mm_" + std::to_string(year) + ".12.UNF0");
     }
-    // endif options
 
-    if (options.outLocWetlStorage || options.outSingleStorages) { // neue OUTPUT-Option
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyLocWetlStorage[n][m]; // LOCAL WETLANDS - conversion double -> float
-        sprintf(filename, "%s/G_LOC_WETL_STORAGE_km3_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+    if (options.outLocWetlStorage || options.outSingleStorages) {
 
-        for (n = 0; n < ng; n++) { // for output in mm
-            for (m = 0; m < 12; m++) {
-                // FP 2015-06 // Only continental cells
+        // LOCAL WETLANDS
+        G_monthlyLocWetlStorage.write(outputDirectory + "/G_LOC_WETL_STORAGE_km3_" + std::to_string(year) + ".12.UNF0");
+
+        for (n = 0; n < ng; n++) {
+            // for output in mm
+            for (month = 0; month < 12; month++) {
+                // Only continental cells
                 if (geo.G_contcell[n]) {
-                    G_monthlyArray[n][m] = G_monthlyLocWetlStorage[n][m] // LOCAL WETLANDS - conversion double -> float
+                    G_monthlyArray(n,month) = G_monthlyLocWetlStorage(n,month)
                                            / (geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) * 1000000;
                 }
-                    // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
+                // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0.
+                // The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation
+                // for this cells leads to inconsistent quantification of global fluxes.
+                // A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                 else {
-                    G_monthlyArray[n][m] = 0.;
+                    G_monthlyArray(n,month) = 0.;
                 }
             }
-            //endfor loop over months
         }
-        // endfor loop over grid cells
-        sprintf(filename, "%s/G_LOC_WETL_STORAGE_mm_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+        G_monthlyArray.write(outputDirectory + "/G_LOC_WETL_STORAGE_mm_" + std::to_string(year) + ".12.UNF0");
     }
-    // endif options
 
-    if (options.outGloLakeStorage || options.outSingleStorages) { // neue OUTPUT-Option
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyGloLakeStorage[n][m]; // GLOBAL LAKES - conversion double -> float
-        sprintf(filename, "%s/G_GLO_LAKE_STORAGE_km3_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+    if (options.outGloLakeStorage || options.outSingleStorages) {
 
-        for (n = 0; n < ng; n++) { // for output in mm
-            for (m = 0; m < 12; m++) {
-                // FP 2015-06 // Only continental cells
+        // GLOBAL LAKES
+        G_monthlyGloLakeStorage.write(outputDirectory + "/G_GLO_LAKE_STORAGE_km3_" + std::to_string(year) + ".12.UNF0");
+
+        for (n = 0; n < ng; n++) {
+            // for output in mm
+            for (month = 0; month < 12; month++) {
+                // Only continental cells
                 if (geo.G_contcell[n]) {
-                    G_monthlyArray[n][m] = G_monthlyGloLakeStorage[n][m] // GLOBAL LAKES - conversion double -> float
+                    G_monthlyArray(n,month) = G_monthlyGloLakeStorage(n,month)
                                            / (geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) * 1000000;
                 }
-                    // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
+                // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0.
+                // The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation
+                // for this cells leads to inconsistent quantification of global fluxes.
+                // A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                 else {
-                    G_monthlyArray[n][m] = 0.;
+                    G_monthlyArray(n,month) = 0.;
                 }
             }
-            //endfor loop over months
         }
-        // endfor loop over grid cells
-        sprintf(filename, "%s/G_GLO_LAKE_STORAGE_mm_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+        G_monthlyArray.write(outputDirectory + "/G_GLO_LAKE_STORAGE_mm_" + std::to_string(year) + ".12.UNF0");
     }
-    // endif option
 
-    if ((options.outResStorage || options.outSingleStorages) && options.resOpt == 1) { // neue OUTPUT-Option
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyResStorage[n][m]; // RESERVOIRS - conversion double -> float
+    if ((options.outResStorage || options.outSingleStorages) && options.resOpt == 1) {
+
+        // RESERVOIRS
+        std::string filename;
+        if (options.grid_store_TypeForStorages == 0)
+            filename = outputDirectory + "/G_RES_STORAGE_km3_" + std::to_string(year) + ".12.UNF0";
+        else
+            filename = outputDirectory + "/G_RES_STORAGE_MEAN_km3_" + std::to_string(year) + ".12.UNF0";
+
+        G_monthlyResStorage.write(filename);
+
+        for (n = 0; n < ng; n++) {
+            // for output in mm
+            for (month = 0; month < 12; month++) {
+                // Only continental cells
+                if (geo.G_contcell[n]) {
+                    G_monthlyArray(n,month) = G_monthlyResStorage(n,month)
+                                           / (geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) * 1000000;
+                }
+                // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0.
+                // The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation
+                // for this cells leads to inconsistent quantification of global fluxes.
+                // A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
+                else {
+                    G_monthlyArray(n,month) = 0.;
+                }
+            }
+        }
 
         if (options.grid_store_TypeForStorages == 0)
-            sprintf(filename, "%s/G_RES_STORAGE_km3_%d.12.UNF0", outputDir, year);
+            filename = outputDirectory + "/G_RES_STORAGE_mm_" + std::to_string(year) + ".12.UNF0";
         else
-            sprintf(filename, "%s/G_RES_STORAGE_MEAN_km3_%d.12.UNF0", outputDir, year);
+            filename = outputDirectory + "/G_RES_STORAGE_MEAN_mm_" + std::to_string(year) + ".12.UNF0";
 
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+        G_monthlyArray.write(filename);
+    }
 
+    if ((options.outResStorage || options.outSingleStorages) && options.resOpt == 1) {
 
-        for (n = 0; n < ng; n++) { // for output in mm
-            for (m = 0; m < 12; m++) {
-                // FP 2015-06 // Only continental cells
+        // RESERVOIRS
+        for (n = 0; n < ng; n++)
+            for (month = 0; month < 12; month++)
+                G_monthlyArray(n,month) = G_monthlyResOutflow(n,month) /
+                                       1000000000.; // [m3/month] -> [km3/month]
+        G_monthlyArray.write(outputDirectory + "/G_RES_OUT_km3_" + std::to_string(year) + ".12.UNF0");
+    }
+
+    if (options.outGloWetlStorage || options.outSingleStorages) {
+
+        // GLOBAL WETLANDS
+        G_monthlyGloWetlStorage.write(outputDirectory + "/G_GLO_WETL_STORAGE_km3_" + std::to_string(year) + ".12.UNF0");
+
+        for (n = 0; n < ng; n++) {
+            // for output in mm
+            for (month = 0; month < 12; month++) {
+                // Only continental cells
                 if (geo.G_contcell[n]) {
-                    G_monthlyArray[n][m] = G_monthlyResStorage[n][m] // RESERVOIRS - conversion double -> float
+                    G_monthlyArray(n,month) = G_monthlyGloWetlStorage(n,month)
                                            / (geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) * 1000000;
                 }
-                    // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
+                // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                 else {
-                    G_monthlyArray[n][m] = 0.;
+                    G_monthlyArray(n,month) = 0.;
                 }
             }
-            //endfor loop over months
         }
-        // endfor loop over grid cells
-
-        if (options.grid_store_TypeForStorages == 0)
-            sprintf(filename, "%s/G_RES_STORAGE_mm_%d.12.UNF0", outputDir, year);
-        else
-            sprintf(filename, "%s/G_RES_STORAGE_MEAN_mm_%d.12.UNF0", outputDir, year);
-
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
-
+        G_monthlyArray.write(outputDirectory + "/G_GLO_WETL_STORAGE_mm_" + std::to_string(year) + ".12.UNF0");
     }
-    // endif options
 
-    if ((options.outResStorage || options.outSingleStorages) && options.resOpt == 1) { // neue OUTPUT-Option
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyResOutflow[n][m] /
-                                       1000000000.; // RESERVOIRS - conversion double -> float; [m3/month] -> [km3/month]
-        sprintf(filename, "%s/G_RES_OUT_km3_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
-    }
-    // endif options
+    if (options.outRiverStorage || options.outSingleStorages) {
 
-    if (options.outGloWetlStorage || options.outSingleStorages) { // neue OUTPUT-Option
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyGloWetlStorage[n][m]; // GLOBAL WETLANDS - conversion double -> float
-        sprintf(filename, "%s/G_GLO_WETL_STORAGE_km3_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+        // RIVER STORAGE
+        G_monthlyRiverStorage.write(outputDirectory + "/G_RIVER_STORAGE_km3_" + std::to_string(year) + ".12.UNF0");
 
-        for (n = 0; n < ng; n++) { // for output in mm
-            for (m = 0; m < 12; m++) {
-                // FP 2015-06 // Only continental cells
+        for (n = 0; n < ng; n++) {
+            // for output in mm
+            for (month = 0; month < 12; month++) {
+                // Only continental cells
                 if (geo.G_contcell[n]) {
-                    G_monthlyArray[n][m] = G_monthlyGloWetlStorage[n][m] // GLOBAL WETLANDS - conversion double -> float
+                    G_monthlyArray(n,month) = G_monthlyRiverStorage(n,month)
                                            / (geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) * 1000000;
                 }
-                    // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
+                // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
                 else {
-                    G_monthlyArray[n][m] = 0.;
+                    G_monthlyArray(n,month) = 0.;
                 }
             }
-            //endfor loop over months
         }
-        // endfor loop over grid cells
-        sprintf(filename, "%s/G_GLO_WETL_STORAGE_mm_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
-
+        G_monthlyArray.write(outputDirectory + "/G_RIVER_STORAGE_mm_" + std::to_string(year) + ".12.UNF0");
     }
-    // endif options
 
-    if (options.outRiverStorage || options.outSingleStorages) { // neue OUTPUT-Option
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyRiverStorage[n][m]; // RIVER STORAGE - conversion double -> float
-        sprintf(filename, "%s/G_RIVER_STORAGE_km3_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+    if ((options.outGlacierStorage || options.outSingleStorages) && (options.glacierOpt == 1)) {
 
-        for (n = 0; n < ng; n++) { // for output in mm
-            for (m = 0; m < 12; m++) {
-                // FP 2015-06 // Only continental cells
-                if (geo.G_contcell[n]) {
-                    G_monthlyArray[n][m] = G_monthlyRiverStorage[n][m] // RIVER STORAGE - conversion double -> float
-                                           / (geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) * 1000000;
-                }
-                    // 100% water cells (of Caspian Sea) have now G_fwaterfreq + G_landfreq = 0. The water balance is calculated in the outlet cell of large lakes; therefore a calculation of e.g. precipitation for this cells leads to inconsistent quantification of global fluxes. A division through 0 has to be avoided now (alternative: define it as not land cells in ng).
-                else {
-                    G_monthlyArray[n][m] = 0.;
-                }
+        G_monthlyGlacierStorage.write(outputDirectory + "/G_GLACIER_STORAGE_km3_" + std::to_string(year) + ".12.UNF0");
+
+        for (n = 0; n < ng; n++) {
+            for (month = 0; month < 12; month++) {
+                if (geo.G_contcell[n])
+                    G_monthlyArray(n,month) = G_monthlyGlacierStorage(n,month) / (geo.areaOfCellByArrayPos(n) * (geo.G_contfreq[n] / 100.)) * 1000000.0;  // for output in mm
+                else
+                    G_monthlyArray(n,month) = 0.;
             }
-            //endfor loop over months
         }
-        // endfor loop over grid cells
-        sprintf(filename, "%s/G_RIVER_STORAGE_mm_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
-
+        G_monthlyArray.write(outputDirectory + "/G_GLACIER_STORAGE_mm_" + std::to_string(year) + ".12.UNF0");
     }
-    // endif options
 
+    if (options.outActualNAS) {
 
-    if (options.outActualNAS) { // neue OUTPUT-Option
+        // ACTUAL USE
         for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++) {
-                //G_monthlyActualUse[n][m] = G_monthlyActualUse[n][m] * 1000000000; // conversion km3/month --> m3/month to avoid loss of small numbers during casting operation.
-                G_monthlyArray[n][m] = G_monthlyActualUse[n][m] * 1000000000; // ACTUAL USE - conversion double -> float
+            for (month = 0; month < 12; month++) {
+                G_monthlyArray(n,month) = G_monthlyActualUse(n,month) * 1000000000;
             }
-        sprintf(filename, "%s/G_ACTUAL_NAS_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+        G_monthlyArray.write(outputDirectory + "/G_ACTUAL_NAS_" + std::to_string(year) + ".12.UNF0");
     }
 
     if (options.outActualNAG) {
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++) {
-                G_monthlyArray[n][m] = G_monthlyNUg[n][m] * 1000000000; // ACTUAL USE - conversion double -> float
-            }
-        sprintf(filename, "%s/G_ACTUAL_NAG_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
 
+        // ACTUAL USE
+        for (n = 0; n < ng; n++)
+            for (month = 0; month < 12; month++) {
+                G_monthlyArray(n,month) = G_monthlyNUg(n,month) * 1000000000;
+            }
+        G_monthlyArray.write(outputDirectory + "/G_ACTUAL_NAG_" + std::to_string(year) + ".12.UNF0");
     }
 
     if (options.outSatisAllocUsein2ndCell) {
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++) {
-            G_monthlyArray[n][m] = G_monthlySatisAllocatedUseinSecondCell[n][m] ;
-        }
-        sprintf(filename, "%s/G_SATIS_ALLOC_USE_IN_2NDCELL_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+        G_monthlySatisAllocatedUseinSecondCell.write(outputDirectory + "/G_SATIS_ALLOC_USE_IN_2NDCELL_" + std::to_string(year) + ".12.UNF0");
     }
 
     if (options.outWCa) {
         for (n = 0; n < ng; n++) {
-            for (m = 0; m < 12; m++) {
-                G_monthlyArray[n][m] = (G_monthlyActualUse[n][m] + G_monthlyNUg[n][m]) * 1000000000;
+            for (month = 0; month < 12; month++) {
+                G_monthlyArray(n,month) = (G_monthlyActualUse(n,month) + G_monthlyNUg(n,month)) * 1000000000;
             }
         }
-        sprintf(filename, "%s/G_ACTUAL_WATER_CONSUMPTION_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+        G_monthlyArray.write(outputDirectory + "/G_ACTUAL_WATER_CONSUMPTION_" + std::to_string(year) + ".12.UNF0");
     }
 
     if (options.outWCaInCellUsed) {
         for (n = 0; n < ng; n++) {
-            for (m = 0; m < 12; m++) {
-                G_monthlyArray[n][m] = (G_monthlyRedistributeAllocUse[n][m] + G_monthlyActualUse[n][m] + G_monthlyNUg[n][m]) * 1000000000;
+            for (month = 0; month < 12; month++) {
+                G_monthlyArray(n,month) = (G_monthlyRedistributeAllocUse(n,month) + G_monthlyRedistributeGLWDUse(n, month) + G_monthlyActualUse(n,month) + G_monthlyNUg(n,month)) * 1000000000;
             }
         }
-        sprintf(filename, "%s/G_ACTUAL_WATER_CONSUMPTION_INCELLUSED_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+
+        G_monthlyArray.write(outputDirectory + "/G_ACTUAL_WATER_CONSUMPTION_INCELLUSED_" + std::to_string(year) + ".12.UNF0");
     }
 
     if (options.outCellAETWCa) { // new output options 2.2b [km3/month]
-        //    if (options.outActualNAS) { // if set to 1, G_monthlyActualUse already in m3/month (see above)
-        //         for (n = 0; n < ng; n++) {
-        //                 for (m = 0; m < 12; m++) {
-        //                     G_monthlyArray[n][m] = G_monthlyCellAET[n][m] + G_monthlyActualUse[n][m] / 1000000000 + G_monthlyNUg[n][m] ; // conversion double -> float
-        //                 }
-        //         }
-        //     } else { // G_monthlyActualUse is in km3/month
         for (n = 0; n < ng; n++) {
-            for (m = 0; m < 12; m++) {
-                G_monthlyArray[n][m] = G_monthlyCellAETWCa[n][m] + G_monthlyActualUse[n][m] +
-                                       G_monthlyNUg[n][m]; // conversion double -> float
+            for (month = 0; month < 12; month++) {
+                G_monthlyArray(n,month) = G_monthlyCellAETWCa(n,month) + G_monthlyActualUse(n,month) +
+                                       G_monthlyNUg(n,month);
             }
         }
-        //     }
-        sprintf(filename, "%s/G_CELLAET_CONSUSE_km3_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+        G_monthlyArray.write(outputDirectory + "/G_CELLAET_CONSUSE_km3_" + std::to_string(year) + ".12.UNF0");
     }
-// endif options.outCellAET
 
-    // FP 2015, not used anymore, at the moment, implement if needed again
-    // CR 15-08-19 G_AllocatedUse = test output: demand allocated from neighboring cell(s)
-    if (options.outAllocUsein2ndCell) { // new output options 2.1f
-        for (n = 0; n < ng; n++)
-            for (m = 0; m < 12; m++)
-                G_monthlyArray[n][m] = G_monthlyAllocatedUse[n][m]; // conversion double -> float
-        sprintf(filename, "%s/G_ALLOC_USE_IN_2NDCELL_%d.12.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 12, &G_monthlyArray[0][0]);
+    // G_AllocatedUse = test output: demand allocated from neighboring cell(s)
+    if (options.outAllocUsein2ndCell) {
+        G_monthlyAllocatedUse.write(outputDirectory + "/G_ALLOC_USE_IN_2NDCELL_" + std::to_string(year) + ".12.UNF0");
     }
-    // endif options.outAllocUse
+
+    if (options.outWaterTempMonthly) {
+        G_monthlyMeanWaterTempRiver.write(outputDirectory + "/G_RIVER_WATER_TEMP_" + std::to_string(year) + ".12.UNF0");
+    }
+
+    if (options.outWaterTempMonthlyAllSWB){
+        G_monthlyMeanWaterTempLocLake.write(outputDirectory + "/G_LOC_LAKE_WATER_TEMP_" + std::to_string(year) + ".12.UNF0");
+        G_monthlyMeanWaterTempLocWetl.write(outputDirectory + "/G_LOC_WETLAND_WATER_TEMP_" + std::to_string(year) + ".12.UNF0");
+        G_monthlyMeanWaterTempGloLake.write(outputDirectory + "/G_GLO_LAKE_WATER_TEMP_" + std::to_string(year) + ".12.UNF0");
+        G_monthlyMeanWaterTempReservoir.write(outputDirectory + "/G_RESERVOIR_WATER_TEMP_" + std::to_string(year) + ".12.UNF0");
+        G_monthlyMeanWaterTempGloWetl.write(outputDirectory + "/G_GLO_WETLAND_WATER_TEMP_" + std::to_string(year) + ".12.UNF0");
+    }
 
 }
-// end writeMonthlyGrids
 
-// daily output option 31 start
-void routingClass::writeDaily31Grids(char *outputDir, const int year, const int month) {
-    if (3 != options.grid_store && 4 != options.grid_store) return;
+void routingClass::writeDaily31Grids(const std::string outputDirectory, const int year, const int month) {
+    if (3 != options.grid_store && 4 != options.grid_store)
+        return;
 
-    char filename[250];
-    double G_dailyArray[ng][31];
-
-    if (options.outCellRunoffDaily) { // new output options 2.2
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31CellRunoff[i][j];
-        }
-        sprintf(filename, "%s/G_CELL_RUNOFF_%d_%d.31.UNF0", outputDir, year, month + 1);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outCellRunoffDaily) {
+        G_daily31CellRunoff.write(outputDirectory + "/G_CELL_RUNOFF_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
-    if (options.outGWRunoffDaily) { // new output options 2.2
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31GwRunoff[i][j];
-        }
-        sprintf(filename, "%s/G_GW_RUNOFF_%d_%d.31.UNF0", outputDir, year, month + 1);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outGWRunoffDaily) {
+        G_daily31GwRunoff.write(outputDirectory + "/G_GW_RUNOFF_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
     if (options.outGwrunSurfrunDaily) {
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31GwrunSurfrun[i][j];
-        }
-        sprintf(filename, "%s/G_GWRUN_SURFRUN_%d_%d.31.UNF0", outputDir, year, month + 1);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+        G_daily31GwrunSurfrun.write(outputDirectory + "/G_GWRUN_SURFRUN_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
-
-    if (options.outPrecDaily) { // new output options 2.2
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31ConsistentPrecip[i][j];
-        }
-        sprintf(filename, "%s/G_CONSISTENT PRECIPITATION_km3_%d_%d.31.UNF0", outputDir, year, month + 1);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outPrecDaily) {
+        G_daily31ConsistentPrecip.write(outputDirectory + "/G_CONSISTENT_PRECIPITATION_km3_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
-    if (options.outCellSurfaceDaily) { // new output options 2.2
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31CellSurfaceRunoff[i][j];
-        }
-        sprintf(filename, "%s/G_CELL_SURFACE_RUNOFF_%d_%d.31.UNF0", outputDir, year, month + 1);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outCellSurfaceDaily) {
+        G_daily31CellSurfaceRunoff.write(outputDirectory + "/G_CELL_SURFACE_RUNOFF_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
-    if (options.outRiverAvailDaily) { // new output options 2.2
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31RiverAvail[i][j];
-        }
-        sprintf(filename, "%s/G_RIVER_AVAIL_%d_%d.31.UNF0", outputDir, year, month + 1);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outRiverAvailDaily) {
+        G_daily31RiverAvail.write(outputDirectory + "/G_RIVER_AVAIL_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
-    if (options.outRiverVeloDaily) { // new output options 2.2
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31Velocity[i][j]; // conversion double -> float
-        }
-        sprintf(filename, "%s/G_RIVER_VELOCITY_%d_%d.31.UNF0", outputDir, year, month + 1);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outRiverVeloDaily) {
+        G_daily31Velocity.write(outputDirectory + "/G_RIVER_VELOCITY_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
-    if (options.outCellAETDaily) { // new output options 2.2
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31CellAET[i][j];
-        }
-        sprintf(filename, "%s/G_CELL_AET_%d_%d.31.UNF0", outputDir, year, month + 1);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outWaterTempDaily) {
+        G_daily31WaterTemp.write(outputDirectory + "/G_RIVER_WATER_TEMP_" + std::to_string(year) + "_" + std::to_string(month + 1) + ".31.UNF0");
     }
-    if (options.outCellAETWCaDaily) { // new output options 2.2
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31CellAETWCa[i][j];
-        }
-        sprintf(filename, "%s/G_CELLAET_CONSUSE_km3_%d_%d.31.UNF0", outputDir, year, month + 1);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outWaterTempDailyAllSWB){
+        G_daily31locLakeTemp.write(outputDirectory + "/G_LOC_LAKE_WATER_TEMP_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
+        G_daily31locWetlTemp.write(outputDirectory + "/G_LOC_WETLAND_WATER_TEMP_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
+        G_daily31gloLakeTemp.write(outputDirectory + "/G_GLO_LAKE_WATER_TEMP_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
+        G_daily31reservoirTemp.write(outputDirectory + "/G_RESERVOIR_WATER_TEMP_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
+        G_daily31gloWetlandTemp.write(outputDirectory + "/G_GLO_WETLAND_WATER_TEMP_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
-    if (options.outSurfStorDaily) { // new output options 2.2
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31SurfStor[i][j];
-        }
-        sprintf(filename, "%s/G_SURFACE_WATER_STORAGE_km3_%d_%d.31.UNF0", outputDir, year, month + 1);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outCellAETDaily) {
+        G_daily31CellAET.write(outputDirectory + "/G_CELL_AET_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
-    if (options.outSingleStoragesDaily) { // new output options 2.2
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31LocLakeStor[i][j];
-        }
-        sprintf(filename, "%s/G_LOC_LAKE_STORAGE_km3_%d_%d.31.UNF0", outputDir, year, month + 1);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outCellAETWCaDaily) {
+        G_daily31CellAETWCa.write(outputDirectory + "/G_CELLAET_CONSUSE_km3_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
-    if (options.outSingleStoragesDaily) { // new output options 2.2
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31LocWetlStor[i][j];
-        }
-        sprintf(filename, "%s/G_LOC_WETL_STORAGE_km3_%d_%d.31.UNF0", outputDir, year, month + 1);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outSurfStorDaily) {
+        G_daily31SurfStor.write(outputDirectory + "/G_SURFACE_WATER_STORAGE_km3_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
-    if (options.outSingleStoragesDaily) { // new output options 2.2
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31GloLakeStor[i][j];
-        }
-        sprintf(filename, "%s/G_GLO_LAKE_STORAGE_km3_%d_%d.31.UNF0", outputDir, year, month + 1);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outSingleStoragesDaily) {
+        G_daily31LocLakeStor.write(outputDirectory + "/G_LOC_LAKE_STORAGE_km3_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
-    if (options.outSingleStoragesDaily) { // new output options 2.2
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31GloWetlStor[i][j];
-        }
-        sprintf(filename, "%s/G_GLO_WETL_STORAGE_km3_%d_%d.31.UNF0", outputDir, year, month + 1);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outSingleStoragesDaily) {
+        G_daily31LocWetlStor.write(outputDirectory + "/G_LOC_WETL_STORAGE_km3_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
-    if (options.outSingleStoragesDaily) { // new output options 2.2
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31RiverStor[i][j];
-        }
-        sprintf(filename, "%s/G_RIVER_STORAGE_km3_%d_%d.31.UNF0", outputDir, year, month + 1);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outSingleStoragesDaily) {
+        G_daily31GloLakeStor.write(outputDirectory + "/G_GLO_LAKE_STORAGE_km3_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
-    if (options.outSingleStoragesDaily) { // new output options 2.2
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31ResStor[i][j];
-        }
-        sprintf(filename, "%s/G_RESERVOIR_STORAGE_km3_%d_%d.31.UNF0", outputDir, year, month + 1);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outSingleStoragesDaily) {
+        G_daily31GloWetlStor.write(outputDirectory + "/G_GLO_WETL_STORAGE_km3_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
-    if (options.outSingleStoragesDaily || options.outGWStorageDaily) { // new output options 2.2
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31GwStor[i][j];
-        }
-        sprintf(filename, "%s/G_GROUND_WATER_STORAGE_km3_%d_%d.31.UNF0", outputDir, year, month + 1);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outSingleStoragesDaily) {
+        G_daily31RiverStor.write(outputDirectory + "/G_RIVER_STORAGE_km3_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
-    if (options.outTotalWaterInStoragesDaily_km3) { // new output options 2.2
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31TotalWaterInStorages_km3[i][j];
-        }
-        sprintf(filename, "%s/G_TOTAL_STORAGES_km3_%d_%d.31.UNF0", outputDir, year, month + 1);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outSingleStoragesDaily) {
+        G_daily31ResStor.write(outputDirectory + "/G_RESERVOIR_STORAGE_km3_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
-    if (options.outTotalWaterInStoragesDaily_mm) { // new output options 2.2
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31TotalWaterInStorages_mm[i][j];
-        }
-        sprintf(filename, "%s/G_TOTAL_STORAGES_mm_%d_%d.31.UNF0", outputDir, year, month + 1);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outSingleStoragesDaily || options.outGWStorageDaily) {
+        G_daily31GwStor.write(outputDirectory + "/G_GROUND_WATER_STORAGE_km3_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
-    if (options.outGwrSwbDaily) { // groundwater recharge below surface waterbodies (with respect to continental area) [mm/month]
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31GwrSwb[i][j];
-        }
-        sprintf(filename, "%s/G_GWR_SURFACE_WATER_BODIES_mm_%d_%d.31.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outTotalWaterInStoragesDaily_km3) {
+        G_daily31TotalWaterInStorages_km3.write(outputDirectory + "/G_TOTAL_STORAGES_km3_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
-    if (options.outFswbDaily) { // fraction of surface water bodies
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31Fswb[i][j];
-        }
-        sprintf(filename, "%s/G_FRACTION_SURFACE_WATER_BODIES_%d_%d.31.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outTotalWaterInStoragesDaily_mm) {
+        G_daily31TotalWaterInStorages_mm.write(outputDirectory + "/G_TOTAL_STORAGES_mm_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
-    if (options.outLandAreaFracDaily) { // fraction of surface water bodies
-        for (int i = 0; i < ng; ++i) {
-            for (int j = 0; j < 31; ++j)
-                G_dailyArray[i][j] = G_daily31LandAreaFrac[i][j];
-        }
-        sprintf(filename, "%s/G_LAND_AREA_FRACTION_%d_%d.31.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 31, &G_dailyArray[0][0]);
+    if (options.outGwrSwbDaily) {
+        // groundwater recharge below surface waterbodies (with respect to continental area) [mm/month]
+        G_daily31GwrSwb.write(outputDirectory + "/G_GWR_SURFACE_WATER_BODIES_mm_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
+    }
+    if (options.outFswbDaily) {
+        // fraction of surface water bodies
+        G_daily31Fswb.write(outputDirectory + "/G_FRACTION_SURFACE_WATER_BODIES_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
+    }
+    if (options.outLandAreaFracDaily) {
+        // fraction of surface water bodies
+        G_daily31LandAreaFrac.write(outputDirectory + "/G_LAND_AREA_FRACTION_" + std::to_string(year) + "_" + std::to_string(month+1) + ".31.UNF0");
     }
 }
-// end writeDaily31Grids
-// daily output option 31 end
 
 // daily output option 365 start
-void routingClass::writeDaily365Grids(char *outputDir, const int year) {
+void routingClass::writeDaily365Grids(const std::string outputDirectory, const int year) {
     if (5 != options.grid_store && 6 != options.grid_store)
         return;
 
-    char filename[250];
-
-
-    if (options.outCellRunoffDaily) { // new output options 2.2
-        sprintf(filename, "%s/G_CELL_RUNOFF_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365CellRunoff[0][0]);
+    if (options.outCellRunoffDaily) {
+        G_daily365CellRunoff.write(outputDirectory + "/G_CELL_RUNOFF_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outCellRunoffDaily) { // new output options 2.2
-        sprintf(filename, "%s/G_CELL_RUNOFF_mm_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365CellRunoff_mm[0][0]);
+    if (options.outCellRunoffDaily) {
+        G_daily365CellRunoff_mm.write(outputDirectory + "/G_CELL_RUNOFF_mm_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outLandAreaFracDaily) { // new output options 2.2
-        sprintf(filename, "%s/G_LAND_AREA_FRACTION_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365LandAreaFrac[0][0]);
+    if (options.outLandAreaFracDaily) {
+        G_daily365LandAreaFrac.write(outputDirectory + "/G_LAND_AREA_FRACTION_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outGWRunoffDaily) { // new output options 2.2
-        sprintf(filename, "%s/G_GW_RUNOFF_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365GwRunoff[0][0]);
+    if (options.outGWRunoffDaily) {
+        G_daily365GwRunoff.write(outputDirectory + "/G_GW_RUNOFF_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outGwrunSurfrunDaily) { // new output options 2.2b ISIMIP2b
-        sprintf(filename, "%s/G_GWRUN_SURFRUN_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365GwrunSurfrun[0][0]);
+    if (options.outGwrunSurfrunDaily) {
+        G_daily365GwrunSurfrun.write(outputDirectory + "/G_GWRUN_SURFRUN_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outCellAETWCaDaily) { // new output options 2.2b ISIMIP2b
-        sprintf(filename, "%s/G_CELLAET_CONSUSE_km3_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365CellAETWCa[0][0]);
+    if (options.outCellAETWCaDaily) {
+        G_daily365CellAETWCa.write(outputDirectory + "/G_CELLAET_CONSUSE_km3_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outPrecDaily) { // new output options 2.2
-        sprintf(filename, "%s/G_CONSISTENT_PRECIPITATION_km3_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365ConsistentPrecip[0][0]);
+    if (options.outPrecDaily) {
+        G_daily365ConsistentPrecip.write(outputDirectory + "/G_CONSISTENT_PRECIPITATION_km3_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outCellSurfaceDaily) { // new output options 2.2
-        sprintf(filename, "%s/G_CELL_SURFACE_RUNOFF_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365CellSurfaceRunoff[0][0]);
+    if (options.outCellSurfaceDaily) {
+        G_daily365CellSurfaceRunoff.write(outputDirectory + "/G_CELL_SURFACE_RUNOFF_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outRiverAvailDaily) { // new output options 2.2
-        sprintf(filename, "%s/G_RIVER_AVAIL_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365RiverAvail[0][0]);
+    if (options.outRiverAvailDaily) {
+        G_daily365RiverAvail.write(outputDirectory + "/G_RIVER_AVAIL_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outRiverVeloDaily) { // new output options 2.2
-        sprintf(filename, "%s/G_RIVER_VELOCITY_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365Velocity[0][0]);
+    if (options.outRiverVeloDaily) {
+        G_daily365Velocity.write(outputDirectory + "/G_RIVER_VELOCITY_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outCellAETDaily) { // new output options 2.2
-        sprintf(filename, "%s/G_CELL_AET_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365CellAET[0][0]);
+    if (options.outCellAETDaily) {
+        G_daily365CellAET.write(outputDirectory + "/G_CELL_AET_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outSurfStorDaily) { // new output options 2.2
-        sprintf(filename, "%s/G_SURFACE_WATER_STORAGE_km3_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365SurfStor[0][0]);
+    if (options.outSurfStorDaily) {
+        G_daily365SurfStor.write(outputDirectory + "/G_SURFACE_WATER_STORAGE_km3_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outSingleStoragesDaily) { // new output options 2.2
-        sprintf(filename, "%s/G_LOC_LAKE_STORAGE_km3_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365LocLakeStor[0][0]);
+    if (options.outSingleStoragesDaily) {
+        G_daily365LocLakeStor.write(outputDirectory + "/G_LOC_LAKE_STORAGE_km3_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outSingleStoragesDaily) { // new output options 2.2
-        sprintf(filename, "%s/G_LOC_WETL_STORAGE_km3_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365LocWetlStor[0][0]);
+    if (options.outSingleStoragesDaily) {
+        G_daily365LocWetlStor.write(outputDirectory + "/G_LOC_WETL_STORAGE_km3_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outSingleStoragesDaily) { // new output options 2.2
-        sprintf(filename, "%s/G_GLO_LAKE_STORAGE_km3_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365GloLakeStor[0][0]);
+    if (options.outSingleStoragesDaily) {
+        G_daily365GloLakeStor.write(outputDirectory + "/G_GLO_LAKE_STORAGE_km3_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outSingleStoragesDaily) { // new output options 2.2
-        sprintf(filename, "%s/G_GLO_WETL_STORAGE_km3_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365GloWetlStor[0][0]);
+    if (options.outSingleStoragesDaily) {
+        G_daily365GloWetlStor.write(outputDirectory + "/G_GLO_WETL_STORAGE_km3_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outSingleStoragesDaily) { // new output options 2.2
-        sprintf(filename, "%s/G_RIVER_STORAGE_km3_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365RiverStor[0][0]);
+    if (options.outSingleStoragesDaily) {
+        G_daily365RiverStor.write(outputDirectory + "/G_RIVER_STORAGE_km3_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outSingleStoragesDaily) { // new output options 2.2
-        sprintf(filename, "%s/G_RESERVOIR_STORAGE_km3_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365ResStor[0][0]);
+    if (options.outSingleStoragesDaily) {
+        G_daily365ResStor.write(outputDirectory + "/G_RESERVOIR_STORAGE_km3_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outSingleStoragesDaily || options.outGWStorageDaily) { // new output options 2.2
-        sprintf(filename, "%s/G_GROUND_WATER_STORAGE_km3_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365GwStor[0][0]);
+    if (options.outSingleStoragesDaily || options.outGWStorageDaily) {
+        G_daily365GwStor.write(outputDirectory + "/G_GROUND_WATER_STORAGE_km3_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outTotalWaterInStoragesDaily_km3) { // new output options 2.2
-        sprintf(filename, "%s/G_TOTAL_STORAGES_km3_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365TotalWaterInStorages_km3[0][0]);
+    if ((options.outGlacierStorageDaily) || (options.outSingleStoragesDaily)) {
+        G_daily365GlacierStorage.write(outputDirectory + "/G_GLACIER_STORAGE_km3_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outTotalWaterInStoragesDaily_mm) { // new output options 2.2
-        sprintf(filename, "%s/G_TOTAL_STORAGES_mm_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365TotalWaterInStorages_mm[0][0]);
+    if (options.outGlacierStorageDaily_mm) {
+        G_daily365GlacierStorage_mm.write(outputDirectory + "/G_GLACIER_STORAGE_mm_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outGwrSwbDaily) { // groundwater recharge below surface waterbodies (with respect to continental area) [mm/month]
-        sprintf(filename, "%s/G_GWR_SURFACE_WATER_BODIES_mm_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365GwrSwb[0][0]);
+    if (options.outTotalWaterInStoragesDaily_km3) {
+        G_daily365TotalWaterInStorages_km3.write(outputDirectory + "/G_TOTAL_STORAGES_km3_" + std::to_string(year) + ".365.UNF0");
     }
-    if (options.outFswbDaily) { // fraction of surface water bodies
-        sprintf(filename, "%s/G_FRACTION_SURFACE_WATER_BODIES_%d.365.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng * 365, &G_daily365Fswb[0][0]);
+    if (options.outTotalWaterInStoragesDaily_mm) {
+        G_daily365TotalWaterInStorages_mm.write(outputDirectory + "/G_TOTAL_STORAGES_mm_" + std::to_string(year) + ".365.UNF0");
+    }
+    if (options.outGwrSwbDaily) {
+        // groundwater recharge below surface waterbodies (with respect to continental area) [mm/month]
+        G_daily365GwrSwb.write(outputDirectory + "/G_GWR_SURFACE_WATER_BODIES_mm_" + std::to_string(year) + ".365.UNF0");
+    }
+    if (options.outFswbDaily) {
+        // fraction of surface water bodies
+        G_daily365Fswb.write(outputDirectory + "/G_FRACTION_SURFACE_WATER_BODIES_" + std::to_string(year) + ".365.UNF0");
     }
 }
-// end writeDaily365Grids
-// daily output option 365 end
 
-void routingClass::writeStartendGrids(char *outputDir, const int year) {
-    char filename[250];
-
-    sprintf(filename, "%s/G_TOTAL_STORAGES_STARTEND_km3_%d.2.UNF0", outputDir, year);
-    gridIO.writeUnfFile(filename, ng * 2, &G_startendTotalWaterInStorages_km3[0][0]);
+void routingClass::writeStartendGrids(const std::string outputDirectory, const int year) {
+    G_startendTotalWaterInStorages_km3.write(outputDirectory + "/G_TOTAL_STORAGES_STARTEND_km3_" + std::to_string(year) + ".2.UNF0");
 }
 
-void routingClass::writeTotalCellRunoffGrid(char *outputDir, int year) {
+void routingClass::writeTotalCellRunoffGrid(const std::string outputDirectory, int year) {
     // used for calculation of correction factor during calibration
-    char filename[250];
-    int n;
-    double G_array[ng];
 
-    if (options.outPotCellRunoffAnnual) { // new output options 2.1f
-        for (n = 0; n < ng; n++)
-            G_array[n] = G_potCellRunoff[n];
-        sprintf(filename, "%s/G_POT_CELL_RUNOFF_%d.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng, &G_array[0]);
+    if (options.outPotCellRunoffAnnual) {
+        G_potCellRunoff.write(outputDirectory + "/G_POT_CELL_RUNOFF_" + std::to_string(year) + ".UNF0");
     }
 }
-// end writeTotalCellRunoffGrid
 
-
-// FP20161018N002 Reservoir operation start years
-void routingClass::writeAnnualFreqGrids(char *outputDir, int year) {
+// Reservoir operation start years
+void routingClass::writeAnnualFreqGrids(const std::string outputDirectory, int year) {
     // yearly output for GFREQ, GFREQW and its changes (unit: percent of grid cell area)
-    char filename[250];
-    int n;
-    float G_array[ng];
 
-    if (options.outLandWaterFractions) { // new output options 2.2 ISIMIP
-        for (n = 0; n < ng; n++)
-            G_array[n] = G_fwaterfreq[n];
-        sprintf(filename, "%s/GFREQW_%d.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng, &G_array[0]);
+    if (options.outLandWaterFractions) {
 
-        for (n = 0; n < ng; n++)
-            G_array[n] = G_fwaterfreq_change[n];
-        sprintf(filename, "%s/GFREQW_change_%d.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng, &G_array[0]);
+        G_fwaterfreq.write(outputDirectory + "/GFREQW_" + std::to_string(year) + ".UNF0");
 
-        for (n = 0; n < ng; n++)
-            G_array[n] = G_landfreq[n];
-        sprintf(filename, "%s/GFREQ_%d.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng, &G_array[0]);
+        G_fwaterfreq_change.write(outputDirectory + "/GFREQW_change_" + std::to_string(year) + ".UNF0");
 
-        for (n = 0; n < ng; n++)
-            G_array[n] = G_landfreq_change[n];
-        sprintf(filename, "%s/GFREQ_change_%d.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng, &G_array[0]);
+        G_landfreq.write(outputDirectory + "/GFREQ_" + std::to_string(year) + ".UNF0");
 
-        for (n = 0; n < ng; n++)
-            G_array[n] = G_landAreaFrac[n];
-        sprintf(filename, "%s/GLAND_AREA_FRAC_%d.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng, &G_array[0]);
+        G_landfreq_change.write(outputDirectory + "/GFREQ_change_" + std::to_string(year) + ".UNF0");
 
-        for (n = 0; n < ng; n++)
-            G_array[n] = G_landAreaFrac_change[n];
-        sprintf(filename, "%s/GLAND_AREA_FRAC_change_%d.UNF0", outputDir, year);
-        gridIO.writeUnfFile(filename, ng, &G_array[0]);
+        G_landAreaFrac.write(outputDirectory + "/GLAND_AREA_FRAC_" + std::to_string(year) + ".UNF0");
+
+        G_landAreaFrac_change.write(outputDirectory + "/GLAND_AREA_FRAC_change_" + std::to_string(year) + ".UNF0");
     }
-
 }
-// end writeAnnualFreqGrids
 
-void createAsciiFile(char *filename, ofstream &streamName) {
+void createAsciiFile(const std::string filename, ofstream &streamName) {
     streamName.open(filename);
     if (!streamName) {
         cerr << "Can not open file " << filename << " for writing" << endl;
@@ -7020,86 +6871,69 @@ void createAsciiFile(char *filename, ofstream &streamName) {
     }
     streamName << "# " << getTimeString();
 }
-// end createAsciiFile
 
-void routingClass::createDailyFiles(const char *outputDir) {
+void routingClass::createDailyFiles(const std::string outputDir) {
 
-    extern cbasinClass cbasin;
+//    extern cbasinClass cbasin;
 
-    char filename[250];
-    if (options.outStationDischargeDaily) { // new output options 2.1f
-        sprintf(filename, "%s/STATION_DISCHARGE_DAILY.OUT", outputDir);
-        createAsciiFile(filename, dailyDischargeFile);
+    if (options.outStationDischargeDaily) {
+        createAsciiFile(outputDir + "/STATION_DISCHARGE_DAILY.OUT", dailyDischargeFile);
         dailyDischargeFile << "# Year\tDay\t";
         for (int n = 0; n <= cbasin.numberOfCalibBasins - 1; n++)
             dailyDischargeFile << cbasin.name[n] << '\t';
         dailyDischargeFile << endl;
     }
-    // +++ daily velo file ++++++++++++++++++++++++++++++++++++++++++++++++ new flow velocity
-    if (options.outStationVelocityDaily) { // new output options 2.2
-        sprintf(filename, "%s/STATION_VELOCITY_DAILY.OUT", outputDir);
-        createAsciiFile(filename, dailyVelocityFile);
+    if (options.outStationVelocityDaily) {
+        createAsciiFile(outputDir + "/STATION_VELOCITY_DAILY.OUT", dailyVelocityFile);
         dailyVelocityFile << "# Year\tDay\t";
         for (int n = 0; n <= cbasin.numberOfCalibBasins - 1; n++)
             dailyVelocityFile << cbasin.name[n] << '\t';
         dailyVelocityFile << endl;
     }
-    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ new flow velocity: end
-
-    if (options.outLocLakeStorageDaily) { // new output options 2.1f
-        sprintf(filename, "%s/LOC_LAKE_STORAGE.OUT", outputDir);
-        createAsciiFile(filename, locLakeFile);
+    if (options.outLocLakeStorageDaily) {
+        createAsciiFile(outputDir + "/LOC_LAKE_STORAGE.OUT", locLakeFile);
         for (int n = 0; n <= cbasin.numberOfCalibBasins - 1; n++)
             locLakeFile << cbasin.name[n] << '\t';
         locLakeFile << endl;
     }
-    if (options.outLocWetlStorageDaily) { // new output options 2.1f
-        sprintf(filename, "%s/LOC_WETL_STORAGE.OUT", outputDir);
-        createAsciiFile(filename, locWetlFile);
+    if (options.outLocWetlStorageDaily) {
+        createAsciiFile(outputDir + "/LOC_WETL_STORAGE.OUT", locWetlFile);
         for (int n = 0; n <= cbasin.numberOfCalibBasins - 1; n++)
             locWetlFile << cbasin.name[n] << '\t';
         locWetlFile << endl;
     }
-    if (options.outGloLakeStorageDaily) { // new output options 2.1f
-        sprintf(filename, "%s/GLO_LAKE_STORAGE.OUT", outputDir);
-        createAsciiFile(filename, gloLakeFile);
+    if (options.outGloLakeStorageDaily) {
+        createAsciiFile(outputDir + "/GLO_LAKE_STORAGE.OUT", gloLakeFile);
         for (int n = 0; n <= cbasin.numberOfCalibBasins - 1; n++)
             gloLakeFile << cbasin.name[n] << '\t';
         gloLakeFile << endl;
     }
 
-    // new output options.outResStorageDaily
-    if (options.outResStorageDaily && (options.resOpt == 1)) { // new output options 2.1f
-        sprintf(filename, "%s/RESERVOIR_STORAGE.OUT", outputDir);
-        createAsciiFile(filename, gloResFile);
+    if (options.outResStorageDaily && (options.resOpt == 1)) {
+        createAsciiFile(outputDir + "/RESERVOIR_STORAGE.OUT", gloResFile);
         for (int n = 0; n <= cbasin.numberOfCalibBasins - 1; n++)
             gloResFile << cbasin.name[n] << '\t';
         gloResFile << endl;
 
     }
-    if (options.outGloWetlStorage) { // new output options 2.1f
-        sprintf(filename, "%s/GLO_WETL_STORAGE.OUT", outputDir);
-        createAsciiFile(filename, gloWetlFile);
+    if (options.outGloWetlStorage) {
+        createAsciiFile(outputDir + "/GLO_WETL_STORAGE.OUT", gloWetlFile);
         for (int n = 0; n <= cbasin.numberOfCalibBasins - 1; n++)
             gloWetlFile << cbasin.name[n] << '\t';
         gloWetlFile << endl;
     }
 }
-// end createDailyFiles
 
 void routingClass::closeDailyFiles() {
     if (options.outStationDischargeDaily) dailyDischargeFile.close();
-    if (options.outStationVelocityDaily) dailyVelocityFile.close(); //+++ new flow velocity
+    if (options.outStationVelocityDaily) dailyVelocityFile.close();
     if (options.outLocLakeStorageDaily) locLakeFile.close();
     if (options.outLocWetlStorageDaily) locWetlFile.close();
     if (options.outGloLakeStorageDaily) gloLakeFile.close();
-    if (options.outResStorageDaily && (options.resOpt == 1))
-        gloResFile.close(); // new output options.outResStorageDaily
+    if (options.outResStorageDaily && (options.resOpt == 1)) gloResFile.close();
     if (options.outGloWetlStorageDaily) gloWetlFile.close();
 }
-// end closeDailyFiles
 
-//-----------------------Velo-File----------------------------------------------------
 void routingClass::appendDailyVelocity(const short actualYear, const short remainingInitYears) {
     // write daily river velocity information into file
     if (options.outStationVelocityDaily) {
@@ -7108,93 +6942,88 @@ void routingClass::appendDailyVelocity(const short actualYear, const short remai
             for (short b = 0; b < nSpecBasins; ++b)
                 dailyVelocityFile << setiosflags(ios::fixed | ios::showpoint)
                                   << setprecision(6) << setw(13)
-                                  << dailyRiverVelocity[b][d] << '\t';
+                                  << dailyRiverVelocity(b,d) << '\t';
             dailyVelocityFile << endl;
         }
     }
 }
-// end appendDailyVelocity
-// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ new flow velocity
 
 
 void routingClass::appendDailyDischarge(const short actualYear, const short remainingInitYears) {
     // write daily river discharge information into file
-    if (options.outStationDischargeDaily) { // new output options 2.1f
+    if (options.outStationDischargeDaily) {
         for (short d = 0; d <= 364; d++) {
             dailyDischargeFile << setw(4) << actualYear << '\t' << setw(3) << d + 1 << '\t';
             for (short b = 0; b < nSpecBasins; ++b)
                 dailyDischargeFile << setiosflags(ios::fixed | ios::showpoint)
                                    << setprecision(6) << setw(13)
-                                   << dailyRiverDischarge[b][d] << '\t';
+                                   << dailyRiverDischarge(b,d) << '\t';
             dailyDischargeFile << endl;
         }
     }
 }
-// end appendDailyDischarge
 
 void routingClass::appendDailyLakeWetl(const short actualYear, const short remainingInitYears) {
-    if (options.outLocLakeStorageDaily) { // new output options 2.1f
+    if (options.outLocLakeStorageDaily) {
         // store daily values of lake and wetland water content
         for (short d = 0; d <= 364; d++) {
             locLakeFile << setw(4) << actualYear << '\t' << setw(3) << d + 1 << '\t';
             for (short b = 0; b < nSpecBasins; ++b)
                 locLakeFile << setiosflags(ios::fixed | ios::showpoint)
                             << setprecision(6) << setw(13)
-                            << dailyLocLakeStorage[b][d] << '\t';
+                            << dailyLocLakeStorage(b,d) << '\t';
             locLakeFile << endl;
         }
     }
-    if (options.outLocWetlStorageDaily) { // new output options 2.1f
+    if (options.outLocWetlStorageDaily) {
         for (short d = 0; d <= 364; d++) {
             locWetlFile << setw(4) << actualYear << '\t' << setw(3) << d + 1 << '\t';
             for (short b = 0; b < nSpecBasins; ++b)
                 locWetlFile << setiosflags(ios::fixed | ios::showpoint)
                             << setprecision(6) << setw(13)
-                            << dailyLocWetlStorage[b][d] << '\t';
+                            << dailyLocWetlStorage(b,d) << '\t';
             locWetlFile << endl;
         }
     }
-    if (options.outGloLakeStorageDaily) { // new output options 2.1f
+    if (options.outGloLakeStorageDaily) {
         for (short d = 0; d <= 364; d++) {
             gloLakeFile << setw(4) << actualYear << '\t' << setw(3) << d + 1 << '\t';
             for (short b = 0; b < nSpecBasins; ++b)
                 gloLakeFile << setiosflags(ios::fixed | ios::showpoint)
                             << setprecision(6) << setw(13)
-                            << dailyGloLakeStorage[b][d] << '\t';
+                            << dailyGloLakeStorage(b,d) << '\t';
             gloLakeFile << endl;
         }
     }
 
-    // new output options.outResStorageDaily
-    if (options.outResStorageDaily && (options.resOpt == 1)) { // new output options 2.1f
+    if (options.outResStorageDaily && (options.resOpt == 1)) {
         for (short d = 0; d <= 364; d++) {
             gloResFile << setw(4) << actualYear << '\t' << setw(3) << d + 1 << '\t';
             for (short b = 0; b < nSpecBasins; ++b)
                 gloResFile << setiosflags(ios::fixed | ios::showpoint)
-                           << setprecision(6) << setw(13) << dailyResStorage[b][d]
+                           << setprecision(6) << setw(13) << dailyResStorage(b,d)
                            << '\t';
             gloResFile << endl;
         }
     }
 
-    if (options.outGloWetlStorageDaily) { // new output options 2.1f
+    if (options.outGloWetlStorageDaily) {
         for (short d = 0; d <= 364; d++) {
             gloWetlFile << setw(4) << actualYear << '\t' << setw(3) << d + 1 << '\t';
             for (short b = 0; b < nSpecBasins; ++b)
                 gloWetlFile << setiosflags(ios::fixed | ios::showpoint)
                             << setprecision(6) << setw(13)
-                            << dailyGloWetlStorage[b][d] << '\t';
+                            << dailyGloWetlStorage(b,d) << '\t';
             gloWetlFile << endl;
         }
     }
 }
-// end appendDailyLakeWetl
 
-void routingClass::createMonthlyDischargeFile(const char *outputDir) {
+void routingClass::createMonthlyDischargeFile(const string outputDir) {
     char filename[250];
-    if (options.outStationDischargeMonthly) { // new output options 2.1f
+    if (options.outStationDischargeMonthly) {
 
-        sprintf(filename, "%s/STATION_DISCHARGE_MONTHLY.OUT", outputDir);
+        sprintf(filename, "%s/STATION_DISCHARGE_MONTHLY.OUT", outputDir.c_str());
         createAsciiFile(filename, monthlyDischargeFile);
         monthlyDischargeFile
                        << "Stationname\t"; //HMS 2017-03-16: changed from "# Station name" to one single word in order to easy handling of output file e.g. in R-scripts.
@@ -7203,14 +7032,13 @@ void routingClass::createMonthlyDischargeFile(const char *outputDir) {
         monthlyDischargeFile << endl;
     }
 
-    // new output option (outResvoirMonthly)
     if (options.outResvoirMonthly && // output option for this 4 files
         options.resOpt == 1 && // New reservoir algorithm (N. Hanasaki) will be used (*)
         ((2 == options.grid_store) || (4 == options.grid_store) ||
          (6 == options.grid_store)) // Store grid files, including monthly values
                    ) {
         // create reservoir storage file (ascii)
-        sprintf(filename, "%s/RESERVOIR_STORAGE_MONTHLY.OUT", outputDir);
+        sprintf(filename, "%s/RESERVOIR_STORAGE_MONTHLY.OUT", outputDir.c_str());
         createAsciiFile(filename, monthlyReservoirStorageFile);
         monthlyReservoirStorageFile << "# Year" << '\t' << "Month" << '\t';
         for (int n = 0; n < ng; n++) {
@@ -7221,7 +7049,7 @@ void routingClass::createMonthlyDischargeFile(const char *outputDir) {
         monthlyReservoirStorageFile << endl;
 
         // create reservoir storage ratio file (ascii)
-        sprintf(filename, "%s/RESERVOIR_STORAGE_RATIO_MONTHLY.OUT", outputDir);
+        sprintf(filename, "%s/RESERVOIR_STORAGE_RATIO_MONTHLY.OUT", outputDir.c_str());
         createAsciiFile(filename, monthlyReservoirStorageRatioFile);
         monthlyReservoirStorageRatioFile << "# Year" << '\t' << "Month" << '\t';
         for (int n = 0; n < ng; n++) {
@@ -7232,7 +7060,7 @@ void routingClass::createMonthlyDischargeFile(const char *outputDir) {
         monthlyReservoirStorageRatioFile << endl;
 
         // create reservoir inflow file (ascii)
-        sprintf(filename, "%s/RESERVOIR_INFLOW_MONTHLY.OUT", outputDir);
+        sprintf(filename, "%s/RESERVOIR_INFLOW_MONTHLY.OUT", outputDir.c_str());
         createAsciiFile(filename, monthlyReservoirInflowFile);
         monthlyReservoirInflowFile << "# Year" << '\t' << "Month" << '\t';
         for (int n = 0; n < ng; n++) {
@@ -7243,7 +7071,7 @@ void routingClass::createMonthlyDischargeFile(const char *outputDir) {
         monthlyReservoirInflowFile << endl;
 
         // create reservoir outflow file (ascii)
-        sprintf(filename, "%s/RESERVOIR_OUTFLOW_MONTHLY.OUT", outputDir);
+        sprintf(filename, "%s/RESERVOIR_OUTFLOW_MONTHLY.OUT", outputDir.c_str());
         createAsciiFile(filename, monthlyReservoirOutflowFile);
         monthlyReservoirOutflowFile << "# Year" << '\t' << "Month" << '\t';
         for (int n = 0; n < ng; n++) {
@@ -7253,16 +7081,14 @@ void routingClass::createMonthlyDischargeFile(const char *outputDir) {
         }
         monthlyReservoirOutflowFile << endl;
     }
-
 }
-// end createMonthlyDischargeFile
 
 void routingClass::closeMonthlyDischargeFile() {
     if (options.outStationDischargeMonthly)
         monthlyDischargeFile.close();
 
     if (options.outResvoirMonthly && // output option for this 4 files
-        options.resOpt == 1 && // New reservoir algorithm (N. Hanasaki) will be used (*)
+        options.resOpt == 1 && // reservoir algorithm (N. Hanasaki) will be used (*)
         ((2 == options.grid_store) || (4 == options.grid_store) ||
          (6 == options.grid_store)) // Store grid files, including monthly values
                    ) {
@@ -7272,12 +7098,11 @@ void routingClass::closeMonthlyDischargeFile() {
         monthlyReservoirOutflowFile.close();
     }
 }
-// end closeMonthlyDischargeFile
 
 void routingClass::appendMonthlyDischarge(const short actualYear, const short remainingInitYears) {
     char number_of_days_in_month[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 
-    if (options.outStationDischargeMonthly) { // new output options 2.1f
+    if (options.outStationDischargeMonthly) {
         short day = 0;
 
         for (short i = 0; i <= 11; i++) {
@@ -7287,7 +7112,7 @@ void routingClass::appendMonthlyDischarge(const short actualYear, const short re
             for (short b = 0; b < nSpecBasins; ++b) {
                 double monthlyDischarge = 0;
                 for (short d = 0; d <= number_of_days_in_month[i] - 1; d++) {
-                    monthlyDischarge += dailyRiverDischarge[b][day + d];
+                    monthlyDischarge += dailyRiverDischarge(b,day + d);
                 }
                 monthlyDischargeFile
                                << setiosflags(ios::fixed | ios::showpoint)
@@ -7303,7 +7128,7 @@ void routingClass::appendMonthlyDischarge(const short actualYear, const short re
         ((2 == options.grid_store) || (4 == options.grid_store) ||
          (6 == options.grid_store)) // Store grid files, including monthly values
                    ) {
-        for (short m = 0; m < 12; m++) {
+        for (short month = 0; month < 12; month++) {
             if (remainingInitYears != 0) {
                 monthlyReservoirStorageFile << "# ";
                 monthlyReservoirStorageRatioFile << "# ";
@@ -7311,47 +7136,46 @@ void routingClass::appendMonthlyDischarge(const short actualYear, const short re
                 monthlyReservoirOutflowFile << "# ";
             }
             monthlyReservoirStorageFile << setw(4) << actualYear << '\t';
-            monthlyReservoirStorageFile << setw(4) << m + 1 << '\t';
+            monthlyReservoirStorageFile << setw(4) << month + 1 << '\t';
 
             monthlyReservoirStorageRatioFile << setw(4) << actualYear << '\t';
-            monthlyReservoirStorageRatioFile << setw(4) << m + 1 << '\t';
+            monthlyReservoirStorageRatioFile << setw(4) << month + 1 << '\t';
 
             monthlyReservoirInflowFile << setw(4) << actualYear << '\t';
-            monthlyReservoirInflowFile << setw(4) << m + 1 << '\t';
+            monthlyReservoirInflowFile << setw(4) << month + 1 << '\t';
 
             monthlyReservoirOutflowFile << setw(4) << actualYear << '\t';
-            monthlyReservoirOutflowFile << setw(4) << m + 1 << '\t';
+            monthlyReservoirOutflowFile << setw(4) << month + 1 << '\t';
 
             for (int n = 0; n < ng; n++) {
-                //G_monthlyResStorage[n][m] /= number_of_days_in_month[m];
 
                 if (G_reservoir_area[n] > 0.0) {
                     if (options.grid_store_TypeForStorages == 0)
-                        G_monthlyResStorageRatio[n][m] = G_monthlyResStorage[n][m] / G_stor_cap[n] * 0.85;
+                        G_monthlyResStorageRatio(n,month) = G_monthlyResStorage(n,month) / G_stor_cap[n];
                     else
-                        G_monthlyResStorageRatio[n][m] =
-                                       G_monthlyResStorage[n][m] / number_of_days_in_month[m] / G_stor_cap[n] * 0.85;
+                        G_monthlyResStorageRatio(n,month) =
+                                       G_monthlyResStorage(n,month) / number_of_days_in_month[month] / G_stor_cap[n];
 
                     // (in routing, timestep flow values [m3/timestep] are summed up to calculate total monthly values here [m3/month]!)
                     // [m3/s]
-                    G_monthlyResInflow[n][m] = G_monthlyResInflow[n][m] / (number_of_days_in_month[m] * 86400.);
-                    G_monthlyResOutflow[n][m] = G_monthlyResOutflow[n][m] / (number_of_days_in_month[m] * 86400.);
+                    G_monthlyResInflow(n,month) = G_monthlyResInflow(n,month) / (number_of_days_in_month[month] * 86400.);
+                    G_monthlyResOutflow(n,month) = G_monthlyResOutflow(n,month) / (number_of_days_in_month[month] * 86400.);
 
                     double tmp_G_monthlyResStorage;
-                    if (options.grid_store_TypeForStorages == 0) tmp_G_monthlyResStorage = G_monthlyResStorage[n][m];
-                    else tmp_G_monthlyResStorage = G_monthlyResStorage[n][m] / number_of_days_in_month[m];
+                    if (options.grid_store_TypeForStorages == 0) tmp_G_monthlyResStorage = G_monthlyResStorage(n,month);
+                    else tmp_G_monthlyResStorage = G_monthlyResStorage(n,month) / number_of_days_in_month[month];
 
                     monthlyReservoirStorageFile << setiosflags(ios::fixed | ios::showpoint)
                                                 << setprecision(6) << setw(13) << tmp_G_monthlyResStorage << '\t';
                     monthlyReservoirStorageRatioFile << setiosflags(ios::fixed | ios::showpoint)
-                                                     << setprecision(6) << setw(13) << G_monthlyResStorageRatio[n][m]
+                                                     << setprecision(6) << setw(13) << G_monthlyResStorageRatio(n,month)
                                                      << '\t';
                     monthlyReservoirInflowFile << setiosflags(ios::fixed | ios::showpoint)
-                                               << setprecision(6) << setw(13) << (G_monthlyResInflow[n][m]) << '\t';
+                                               << setprecision(6) << setw(13) << (G_monthlyResInflow(n,month)) << '\t';
                     monthlyReservoirOutflowFile << setiosflags(ios::fixed | ios::showpoint)
-                                                << setprecision(6) << setw(13) << (G_monthlyResOutflow[n][m]) << '\t';
+                                                << setprecision(6) << setw(13) << (G_monthlyResOutflow(n,month)) << '\t';
                 } else
-                    G_monthlyResStorageRatio[n][m] = -99.99;
+                    G_monthlyResStorageRatio(n,month) = -99.99;
 
             }
             monthlyReservoirStorageFile << endl;
@@ -7361,30 +7185,27 @@ void routingClass::appendMonthlyDischarge(const short actualYear, const short re
         }
     }
 }
-// end appendMonthlyDischarge
 
-void routingClass::createAnnualDischargeFile(const char *outputDir) {
-    if (options.outStationDischargeAnnual) { // new output options 2.1f
+void routingClass::createAnnualDischargeFile(const string outputDir) {
+    if (options.outStationDischargeAnnual) {
         char filename[250];
 
-        sprintf(filename, "%s/STATION_DISCHARGE_ANNUAL.OUT", outputDir);
+        sprintf(filename, "%s/STATION_DISCHARGE_ANNUAL.OUT", outputDir.c_str());
         createAsciiFile(filename, annualDischargeFile);
         annualDischargeFile
-                       << "Stationname\t"; //HMS 2017-03-16: changed from "# Station name" to one single word in order to easy handling of output file e.g. in R-scripts.
+                       << "Stationname\t"; // single word in order to easy handling of output file e.g. in R-scripts.
         for (int n = 0; n <= cbasin.numberOfCalibBasins - 1; n++)
             annualDischargeFile << cbasin.name[n] << '\t';
         annualDischargeFile << endl;
     }
 }
-// end createAnnualDischargeFile
 
 void routingClass::closeAnnualDischargeFile() {
     if (options.outStationDischargeAnnual) annualDischargeFile.close();
 }
-// end closeAnnualDischargeFile
 
 void routingClass::appendAnnualDischarge(const short actualYear, const short remainingInitYears) {
-    if (options.outStationDischargeAnnual) { // new output options 2.1f
+    if (options.outStationDischargeAnnual) {
         if (remainingInitYears != 0)
             annualDischargeFile << "# ";
         annualDischargeFile << setw(4) << actualYear << '\t';
@@ -7392,7 +7213,7 @@ void routingClass::appendAnnualDischarge(const short actualYear, const short rem
         for (short b = 0; b < nSpecBasins; ++b) {
             double annualDischarge = 0;
             for (short i = 0; i <= 364; i++) {
-                annualDischarge += dailyRiverDischarge[b][i];
+                annualDischarge += dailyRiverDischarge(b,i);
             }
             annualDischargeFile << setiosflags(ios::fixed | ios::showpoint)
                                 << setprecision(6) << setw(13) << annualDischarge << '\t';
@@ -7400,30 +7221,27 @@ void routingClass::appendAnnualDischarge(const short actualYear, const short rem
         annualDischargeFile << endl;
     }
 }
-// end appendAnnualDischarge
 
 void routingClass::appendCalibInfoToAnnualDischargeFile(const double gamma) {
-    if (options.outStationDischargeAnnual) { // new output options 2.1f
+    if (options.outStationDischargeAnnual) {
         annualDischargeFile << "# Next step of calibration." << endl;
         annualDischargeFile << "# Gamma = " << gamma << endl;
     }
 }
-// end appendCalibInfoToAnnualDischargeFile
 
 double routingClass::getAnnualDischarge(const int stationNumber) {
     double annualDischarge = 0;
 
     for (short i = 0; i <= 364; i++) {
-        annualDischarge += dailyRiverDischarge[stationNumber - 1][i];
+        annualDischarge += dailyRiverDischarge(stationNumber - 1,i);
     }
     return annualDischarge;
 }
-// end getAnnualDischarge
 
 double routingClass::getAnnualUpstreamInflow(const int stationNumber) {
     // calculates annual inflow from upstream basins
 
-    extern upstreamStationClass directUpstSt;
+//    extern upstreamStationClass directUpstSt;
     int upSt;
     short i;
     double stationAnnualDischarge = 0, totalAnnualDischarge = 0;
@@ -7432,34 +7250,30 @@ double routingClass::getAnnualUpstreamInflow(const int stationNumber) {
         stationAnnualDischarge = 0;
         upSt = directUpstSt.getUpstreamStation(stationNumber, n);
         for (i = 0; i <= 364; i++) {
-            stationAnnualDischarge += dailyRiverDischarge[upSt - 1][i];
+            stationAnnualDischarge += dailyRiverDischarge(upSt - 1,i);
         }
         totalAnnualDischarge += stationAnnualDischarge;
     }
     return totalAnnualDischarge;
 }
-// end getAnnualUpstreamInflow
 
 double routingClass::getAnnualSatisfWaterUse(const int stationNumber) {
-    //extern waterUseClass waterUse;
-    extern signed short G_sbasin[ng];
 
     double satisfiedBasinUse = 0;
 
     for (int n = 0; n <= ng - 1; n++) {
         if (stationNumber == G_sbasin[n]) {
-            //satisfiedBasinUse += G_satisfiedUse[n];
-            // CR 2015-09: A distinction between satisfied use and actual use is not possible in 22b.
+            // A distinction between satisfied use and actual use is not possible in 22b.
             satisfiedBasinUse += G_actualUse[n];
         }
     }
 
     return satisfiedBasinUse;
 }
-// end getAnnualSatisfWaterUse
 
 double routingClass::getRiverVelocity(const double RiverSlope, const double G_riverBottomWidth,
-                                      const double Roughness, double G_riverInflow, const int n) {
+                                      const double Roughness, double G_riverInflow, const int n, calibParamClass &calParam) // OE: added calParam
+            {
     double river_velocity;
 
     double riverDepth;
@@ -7475,14 +7289,12 @@ double routingClass::getRiverVelocity(const double RiverSlope, const double G_ri
     // trapezoidal channel shape with channel sides 2:1 run to rise ratio
     crossSectionalArea = riverDepth * (2.0 * riverDepth + G_riverBottomWidth); // trapezoidal river shape
     wettedPerimeter = G_riverBottomWidth + 2.0 * riverDepth * sqrt(5.0); // sqrt(1+2^2)
-    //crossSectionalArea = riverDepth * (riverDepth + G_riverBottomWidth); // trapezoidal river shape
-    //wettedPerimeter = G_riverBottomWidth + 2.0 * riverDepth * sqrt(2.0); // sqrt(1+2^2)
 
     hydraulicRad = crossSectionalArea / wettedPerimeter;
 
     // calculate riverVelocity
-    // Cell-specific calibration parameters - Apply multiplier  // FP
-    river_velocity = 1. / (calibParam.getValue(M_RIVRGH_C, n) * Roughness) * pow(hydraulicRad, (2. / 3.)) *
+    // Cell-specific calibration parameters - Apply multiplier
+    river_velocity = 1. / (calParam.getValue(M_RIVRGH_C, n) * Roughness) * pow(hydraulicRad, (2. / 3.)) *
                      pow(RiverSlope, 0.5); //[m/sec]
     river_velocity = river_velocity * 86.4; //m/sec -->km/day (60*60*24)/1000
 
@@ -7492,16 +7304,11 @@ double routingClass::getRiverVelocity(const double RiverSlope, const double G_ri
         return 0.00001;
     else
         return river_velocity;
-    //return G_riverInflow;
-    //return RiverSlope;
-    //return G_riverBottomWidth;
-    //return Roughness;
-
 }
-// end getRiverVelocity
 
 double routingClass::getNewRiverVelocity(const double RiverSlope, const double G_riverBottomWidth,
-                                         const double Roughness, double G_riverStorage, double G_riverLength, const int n) {
+                                         const double Roughness, double G_riverStorage, double G_riverLength, const int n,calibParamClass &calParam)// OE: added calParam
+            {
     double river_velocity;
 
     double riverDepth;
@@ -7516,14 +7323,13 @@ double routingClass::getNewRiverVelocity(const double RiverSlope, const double G
     // G_riverBottomWidth in m
     riverDepth = - G_riverBottomWidth/4.0 + sqrt(G_riverBottomWidth * G_riverBottomWidth/16.0 + 0.5 * crossSectionalArea);
 
-    // Version 22 and 22b:
     wettedPerimeter = G_riverBottomWidth + 2.0 * riverDepth * sqrt(5.0); // sqrt(1+2^2)
 
     hydraulicRad = crossSectionalArea / wettedPerimeter;
 
     // calculate riverVelocity
-    // Cell-specific calibration parameters - Apply multiplier  // FP
-    river_velocity = 1. / (calibParam.getValue(M_RIVRGH_C,n) * Roughness) * pow(hydraulicRad, (2. / 3.)) * pow(RiverSlope, 0.5); //[m/sec]
+    // Cell-specific calibration parameters - Apply multiplier
+    river_velocity = 1. / (calParam.getValue(M_RIVRGH_C,n) * Roughness) * pow(hydraulicRad, (2. / 3.)) * pow(RiverSlope, 0.5); //[m/sec]
     river_velocity = river_velocity * 86.4; //m/sec -->km/day (60*60*24)/1000
 
     // return value in [km/day]; if value is below 1cm/day then set limit
@@ -7532,24 +7338,18 @@ double routingClass::getNewRiverVelocity(const double RiverSlope, const double G
         return 0.00001;
     else
         return river_velocity;
-    //return G_riverInflow;
-    //return RiverSlope;
-    //return G_riverBottomWidth;
-    //return Roughness;
 }
-// end getNewRiverVelocity
 
 void routingClass::getAnnualDischargeVector(vector<float>&annualDischargeVector) {
     for (short n = 0; n < nSpecBasins; n++) {
         float annualDischarge = 0;
         for (short i = 0; i <= 364; i++) {
-            annualDischarge += dailyRiverDischarge[n][i];
+            annualDischarge += dailyRiverDischarge(n,i);
         }
         annualDischarge *= 1000000000 / (double) (365 * 24 * 60 * 60); // km3/a -> m3/s
         annualDischargeVector.push_back(annualDischarge);
     }
 }
-// end getAnnualDischargeVector
 
 void routingClass::getMonthlyDischargeVector(short month, vector<float> &monthlyDischargeVector) {
     short day = 0;
@@ -7559,7 +7359,7 @@ void routingClass::getMonthlyDischargeVector(short month, vector<float> &monthly
             for (short b = 0; b < nSpecBasins; ++b) {
                 float monthlyDischarge = 0;
                 for (short d = 0; d < number_of_days_in_month[i]; d++) {
-                    monthlyDischarge += dailyRiverDischarge[b][day + d];
+                    monthlyDischarge += dailyRiverDischarge(b,day + d);
                 }
                 monthlyDischarge *= 1000000000 / (float) (24 * 60 * 60 * number_of_days_in_month[i]);
                 monthlyDischargeVector.push_back(monthlyDischarge);
@@ -7569,7 +7369,6 @@ void routingClass::getMonthlyDischargeVector(short month, vector<float> &monthly
         day += number_of_days_in_month[i];
     }
 }
-// end getMonthlyDischargeVector
 
 void routingClass::getMinMonthlyDischargeVector(vector<float> &monthlyDischargeVector) {
     char number_of_days_in_month[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
@@ -7579,7 +7378,7 @@ void routingClass::getMinMonthlyDischargeVector(vector<float> &monthlyDischargeV
         for (short i = 0; i <= 11; i++) {
             float monthlyDischarge = 0;
             for (short d = 0; d <= number_of_days_in_month[i] - 1; d++) {
-                monthlyDischarge += dailyRiverDischarge[b][day + d];
+                monthlyDischarge += dailyRiverDischarge(b,day + d);
             }
             monthlyDischarge *= 1000000000 / (float) (24 * 60 * 60 * number_of_days_in_month[i]);
             if (monthlyDischarge < minValue)
@@ -7589,7 +7388,6 @@ void routingClass::getMinMonthlyDischargeVector(vector<float> &monthlyDischargeV
         monthlyDischargeVector.push_back(minValue);
     }
 }
-// end getMinMonthlyDischargeVector
 
 void routingClass::getMinToMaxDischargeVector(vector<float> &monthlyDischargeVector) {
     char number_of_days_in_month[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
@@ -7600,7 +7398,7 @@ void routingClass::getMinToMaxDischargeVector(vector<float> &monthlyDischargeVec
         for (short i = 0; i <= 11; i++) {
             float monthlyDischarge = 0;
             for (short d = 0; d <= number_of_days_in_month[i] - 1; d++) {
-                monthlyDischarge += dailyRiverDischarge[b][day + d];
+                monthlyDischarge += dailyRiverDischarge(b,day + d);
             }
             monthlyDischarge *= 1000000000 / (float) (24 * 60 * 60 * number_of_days_in_month[i]);
             if (monthlyDischarge < minValue)
@@ -7612,10 +7410,10 @@ void routingClass::getMinToMaxDischargeVector(vector<float> &monthlyDischargeVec
         monthlyDischargeVector.push_back(minValue / maxValue);
     }
 }
-// end getMinToMaxDischargeVector
 
 // Implementation of class method calcNextDay_M(...)
-void routingClass::calcNextDay_M(const short new_day) {
+void routingClass::calcNextDay_M(const short month) {
+    /*
     static short month = 11;
     static short old_day;
     short old_month;
@@ -7633,348 +7431,33 @@ void routingClass::calcNextDay_M(const short new_day) {
     while (new_day > last_day_per_month[month])
         month++;
 
-    //cout << new_day << ' ' << month << endl;
-
     if (new_day != old_day + 1) {
         cerr << "Day counter mismatch!\n";
         exit(-1);
     }
-
-    for (int n = 0; n <= ng - 1; n++) {
-        //G_totalDailyUse[n] = G_dailyWaterUse[n][month];
-        G_dailydailyNUs[n] = G_dailyNUs[n][month];
-        G_dailydailyNUg[n] = G_dailyNUg[n][month];
+*/
+    for (int n = 0; n < ng ; n++) {
+        G_dailydailyNUs[n] = G_dailyNUs(n,month);
+        G_dailydailyNUg[n] = G_dailyNUg(n,month);
 
         if (1 == options.aggrNUsGloLakResOpt) {
-            G_dailydailyNUsAggregated[n] = G_dailyNUsAggregated[n][month];
-        }}
-    old_day = new_day;
+            G_dailydailyNUsAggregated[n] = G_dailyNUsAggregated(n,month);
+        }
+    }
+    //old_day = new_day;
 }
-// end calcNextDay_M
 
 routingClass::~routingClass() {
-    delete[] dailyRiverDischarge;
-    delete[] G_monthlySwStorage;
-    delete[] G_monthlyGwStorage;
-    delete[] G_monthlyGwRunoff;
-    delete[] G_monthlyLocWetlExtent;
-    delete[] G_monthlyGloWetlExtent;
 
-    if (options.day_store == 1) {
-        delete[] dailyRiverVelocity; // ++++++++++++++++++++++++++++++++++++++++++++++++ new flow velocity
-        delete[] dailyLocLakeStorage;
-        delete[] dailyLocWetlStorage;
-        delete[] dailyGloLakeStorage;
-        if (options.resOpt == 1) delete[] dailyResStorage;
-        delete[] dailyGloWetlStorage;
-    }
-
-    if (options.resOpt == 1) {
-        delete[] G_gloResStorage;
-        G_gloResStorage = NULL;
-        delete[] G_res_type;
-        G_res_type = NULL;
-        delete[] G_start_month;
-        G_start_month = NULL;
-        delete[] G_mean_outflow;
-        G_mean_outflow = NULL;
-        // FP20161018N002 Reservoir operation start years
-        // G_res_start_year & G_stor_cap_full (instead G_stor_cap)
-        delete[] G_res_start_year;
-        G_res_start_year = NULL;
-        delete[] G_stor_cap_full;
-        G_stor_cap_full = NULL;
-        delete[] G_mean_demand;
-        G_mean_demand = NULL;
-        delete[] G_mean_cons_use;
-        G_mean_cons_use = NULL;
-        delete[] G_alloc_coeff;
-        G_alloc_coeff = NULL;
-        delete[] K_release;
-        K_release = NULL;
-        delete[] annual_release;
-        annual_release = NULL;
-    }
-
-    if ((2 == options.grid_store) || (4 == options.grid_store) || (6 == options.grid_store)) {
-        delete[] G_monthlyRiverAvail;
-        G_monthlyRiverAvail = NULL;
-        delete[] G_monthlyConsistentPrecip;
-        G_monthlyConsistentPrecip = NULL;
-        delete[] G_monthlyPotCellRunoff;
-        G_monthlyPotCellRunoff = NULL;
-        delete[] G_monthlyPotCellRunoffDeficit;
-        G_monthlyPotCellRunoffDeficit = NULL;
-
-        if (options.outRiverInUpstream)
-            delete[] G_monthlyRiverInUpstream;
-        G_monthlyRiverInUpstream = NULL;
-        delete[] G_monthlyCellRunoff;
-        G_monthlyCellRunoff = NULL;
-        delete[] G_monthlyCellSurfaceRunoff;
-        G_monthlyCellSurfaceRunoff = NULL;
-        // added for cell AET calculation (2.1f)
-        delete[]G_monthlyCellAET;
-        G_monthlyCellAET = NULL;
-        delete[]G_monthlyCellAETWCa;
-        G_monthlyCellAETWCa = NULL;
-        delete[]G_monthlyOpenWaterEvap;
-        G_monthlyOpenWaterEvap = NULL;
-
-        delete[] G_monthlyVelocity;
-        G_monthlyVelocity = NULL;
-        delete[] G_monthlySurfStor;
-        G_monthlySurfStor = NULL;
-        delete[] G_monthlySurfStor_mm;
-        G_monthlySurfStor_mm = NULL;
-
-        delete[] G_monthlyMinRiverAvail;
-        G_monthlyMinRiverAvail = NULL;
-        delete[] G_monthlyMaxRiverAvail;
-        G_monthlyMaxRiverAvail = NULL;
-
-        delete[] G_monthlyGwrSwb;
-        G_monthlyGwrSwb = NULL;
-        delete[] G_monthlyFswb;
-        G_monthlyFswb = NULL;
-        if (options.outRiverPET) delete[] G_monthlyRiverAreaFrac;
-        G_monthlyRiverAreaFrac = NULL;
-        if (options.outRiverPET) delete[] G_monthlyRiverPET;
-        G_monthlyRiverPET = NULL;
-
-        //define arrays for new output
-        if (options.resOpt == 1) {
-            delete[] G_monthlyResStorage;
-            G_monthlyResStorage = NULL;
-            delete[] G_monthlyResStorageRatio;
-            G_monthlyResStorageRatio = NULL;
-            delete[] G_monthlyResInflow;
-            G_monthlyResInflow = NULL;
-            delete[] G_monthlyResOutflow;
-            G_monthlyResOutflow = NULL;
-        }
-        delete[] G_monthlyRiverStorage;
-        G_monthlyRiverStorage = NULL;
-        delete[] G_monthlyLocLakeStorage;
-        G_monthlyLocLakeStorage = NULL;
-        delete[] G_monthlyLocWetlStorage;
-        G_monthlyLocWetlStorage = NULL;
-        delete[] G_monthlyGloLakeStorage;
-        G_monthlyGloLakeStorage = NULL;
-        delete[] G_monthlyGloWetlStorage;
-        G_monthlyGloWetlStorage = NULL;
-        delete[] G_monthlySatisfiedUse;
-        G_monthlySatisfiedUse = NULL;
-        delete[] G_monthlyActualUse;
-        G_monthlyActualUse = NULL;
-        delete[] G_monthlyNUg;
-        G_monthlyNUg = NULL;
-        // FP 2015, not used anymore, at the moment, implement if needed again
-        //CR 15-08-19 G_AllocatedUse = test output: demand allocated from neighboring cell(s)
-        delete[] G_monthlyAllocatedUse;
-        G_monthlyAllocatedUse = NULL;
-    }
-
-    // daily output option 31 start
-    if ((3 == options.grid_store) || (4 == options.grid_store)) {
-        if (options.outPrecDaily) {
-            delete[] G_daily31ConsistentPrecip;
-            G_daily31ConsistentPrecip = NULL;
-        }
-        if (options.outCellRunoffDaily) {
-            delete[] G_daily31CellRunoff;
-            G_daily31CellRunoff = NULL;
-        }
-        if (options.outGWRunoffDaily) {
-            delete[] G_daily31GwRunoff;
-            G_daily31GwRunoff = NULL;
-        }
-        if (options.outCellSurfaceDaily) {
-            delete[] G_daily31CellSurfaceRunoff;
-            G_daily31CellSurfaceRunoff = NULL;
-        }
-        if (options.outRiverAvailDaily) {
-            delete[] G_daily31RiverAvail;
-            G_daily31RiverAvail = NULL;
-        }
-        if (options.outRiverVeloDaily) {
-            delete[] G_daily31Velocity;
-            G_daily31Velocity = NULL;
-        }
-        if (options.outCellAETDaily) {
-            delete[] G_daily31CellAET;
-            G_daily31CellAET = NULL;
-        }
-        if (options.outCellAETWCaDaily) {
-            delete[] G_daily31CellAETWCa;
-            G_daily31CellAETWCa = NULL;
-        }
-        if (options.outSurfStorDaily) {
-            delete[] G_daily31SurfStor;
-            G_daily31SurfStor = NULL;
-        }
-        if (options.outSingleStoragesDaily) {
-            delete[] G_daily31LocLakeStor;
-            G_daily31LocLakeStor = NULL;
-        }
-        if (options.outSingleStoragesDaily) {
-            delete[] G_daily31LocWetlStor;
-            G_daily31LocWetlStor = NULL;
-        }
-        if (options.outSingleStoragesDaily) {
-            delete[] G_daily31GloLakeStor;
-            G_daily31GloLakeStor = NULL;
-        }
-        if (options.outSingleStoragesDaily) {
-            delete[] G_daily31GloWetlStor;
-            G_daily31GloWetlStor = NULL;
-        }
-        if (options.outSingleStoragesDaily) {
-            delete[] G_daily31RiverStor;
-            G_daily31RiverStor = NULL;
-        }
-        if (options.outSingleStoragesDaily) {
-            delete[] G_daily31ResStor;
-            G_daily31ResStor = NULL;
-        }
-        if (options.outSingleStoragesDaily || options.outGWStorageDaily) {
-            delete[] G_daily31GwStor;
-            G_daily31GwStor = NULL;
-        }
-        if (options.outTotalWaterInStoragesDaily_km3 || options.outTotalWaterInStoragesDaily_mm)
-            delete[] G_daily31TotalWaterInStorages_km3;
-        G_daily31TotalWaterInStorages_km3 = NULL;
-        if (options.outTotalWaterInStoragesDaily_mm) delete[] G_daily31TotalWaterInStorages_mm;
-        G_daily31TotalWaterInStorages_mm = NULL;
-        if (options.outGwrSwbDaily) {
-            delete[] G_daily31GwrSwb;
-            G_daily31GwrSwb = NULL;
-        }
-        if (options.outFswbDaily) {
-            delete[] G_daily31Fswb;
-            G_daily31Fswb = NULL;
-        }
-        if (options.outLandAreaFracDaily) {
-            delete[] G_daily31LandAreaFrac;
-            G_daily31LandAreaFrac = NULL;
-        }
-        if (options.outGwrunSurfrunDaily) {
-            delete[] G_daily31GwrunSurfrun;
-            G_daily31GwrunSurfrun = NULL;
-        }
-    }
-    // daily output option 31 end
-
-    // daily output option 365 start
-    if ((5 == options.grid_store) || (6 == options.grid_store)) {
-        if ((options.outPrecDaily) || ((options.scoutcPrecip) && (2 == options.day_store))) {
-            delete[] G_daily365ConsistentPrecip;
-            G_daily365ConsistentPrecip = NULL;
-        }
-        if ((options.outCellRunoffDaily) || ((options.scoutCellRunoffkm3) || (options.scoutCellRunoffmm) && (2 ==
-                                                                                                             options.day_store))) {
-            delete[] G_daily365CellRunoff;
-            G_daily365CellRunoff = NULL;
-        }
-        if ((options.outCellRunoffDaily) || ((options.scoutCellRunoffmm) && (2 == options.day_store))) {
-            delete[] G_daily365CellRunoff_mm;
-            G_daily365CellRunoff = NULL;
-        }
-        if ((options.outCellSurfaceDaily) || ((options.scoutCellSRunoff) && (2 == options.day_store))) {
-            delete[] G_daily365CellSurfaceRunoff;
-            G_daily365CellSurfaceRunoff = NULL;
-        } // FP20160915N002
-        // FP20161018N002 Reservoir operation start years: outLandAreaFracDaily instead outLandAreaFrac
-        if ((options.outLandAreaFracDaily) || ((options.scoutLandAreaFrac) && (2 == options.day_store))) {
-            delete[] G_daily365LandAreaFrac;
-            G_daily365LandAreaFrac = NULL;
-        }
-        if ((options.outGWRunoffDaily) || ((options.scoutGwRunoff) && (2 == options.day_store))) {
-            delete[] G_daily365GwRunoff;
-            G_daily365GwRunoff = NULL;
-        }
-        if ((options.outRiverAvailDaily) || ((options.scoutQ) && (2 == options.day_store))) {
-            delete[] G_daily365RiverAvail;
-            G_daily365RiverAvail = NULL;
-        }
-        if ((options.outRiverVeloDaily) || ((options.scoutFlowVelo) && (2 == options.day_store))) {
-            delete[] G_daily365Velocity;
-            G_daily365Velocity = NULL;
-        }
-        if ((options.outCellAETDaily) || ((options.scoutCellAET) && (2 == options.day_store))) {
-            delete[] G_daily365CellAET;
-            G_daily365CellAET = NULL;
-        }
-        if ((options.outSurfStorDaily) || ((options.scoutSurfaceStor) && (2 == options.day_store))) {
-            delete[] G_daily365SurfStor;
-            G_daily365SurfStor = NULL;
-        }
-        if ((options.outSingleStoragesDaily) || ((options.scoutLocLake) && (2 == options.day_store))) {
-            delete[] G_daily365LocLakeStor;
-            G_daily365LocLakeStor = NULL;
-        }
-        if ((options.outSingleStoragesDaily) || ((options.scoutLocWet) && (2 == options.day_store))) {
-            delete[] G_daily365LocWetlStor;
-            G_daily365LocWetlStor = NULL;
-        }
-        if ((options.outSingleStoragesDaily) || ((options.scoutGloLake) && (2 == options.day_store))) {
-            delete[] G_daily365GloLakeStor;
-            G_daily365GloLakeStor = NULL;
-        }
-        if ((options.outSingleStoragesDaily) || ((options.scoutGloWet) && (2 == options.day_store))) {
-            delete[] G_daily365GloWetlStor;
-            G_daily365GloWetlStor = NULL;
-        }
-        if ((options.outSingleStoragesDaily) || ((options.scoutRiver) && (2 == options.day_store))) {
-            delete[] G_daily365RiverStor;
-            G_daily365RiverStor = NULL;
-        }
-        if ((options.outSingleStoragesDaily) || ((options.scoutReservoir) && (2 == options.day_store))) {
-            delete[] G_daily365ResStor;
-            G_daily365ResStor = NULL;
-        }
-        if ((options.outSingleStoragesDaily || options.outGWStorageDaily) ||
-            ((options.scoutGwStor) && (2 == options.day_store))) {
-            delete[] G_daily365GwStor;
-            G_daily365GwStor = NULL;
-        }
-        if ((options.outTotalWaterInStoragesDaily_km3 || options.outTotalWaterInStoragesDaily_mm) ||
-            ((options.scoutTWSkm3) || (options.scoutTWSmm) && (2 == options.day_store))) {
-            delete[] G_daily365TotalWaterInStorages_km3;
-            G_daily365TotalWaterInStorages_km3 = NULL;
-        }
-        if ((options.outTotalWaterInStoragesDaily_mm) || ((options.scoutTWSmm) && (2 == options.day_store))) {
-            delete[] G_daily365TotalWaterInStorages_mm;
-            G_daily365TotalWaterInStorages_mm = NULL;
-        }
-        if ((options.outGwrSwbDaily) || ((options.scoutGwrSwb) && (2 == options.day_store))) {
-            delete[] G_daily365GwrSwb;
-            G_daily365GwrSwb = NULL;
-        }
-        if ((options.outFswbDaily) || ((options.scoutFswb) && (2 == options.day_store))) {
-            delete[] G_daily365Fswb;
-            G_daily365Fswb = NULL;
-        }
-        if (options.outGwrunSurfrunDaily) {
-            delete[] G_daily365GwrunSurfrun;
-            G_daily365GwrunSurfrun = NULL;
-        }
-        if (options.outCellAETWCaDaily) {
-            delete[] G_daily365CellAETWCa;
-            G_daily365CellAETWCa = NULL;
-        }
-    }
-    // daily output option 365 end
     monthlyDischargeFile.close();
     annualDischargeFile.close();
     if (options.outStationDischargeDaily) dailyDischargeFile.close();
-    if (options.outStationVelocityDaily) dailyVelocityFile.close(); //+++ new flow velocity
+    if (options.outStationVelocityDaily) dailyVelocityFile.close();
     if (options.outLocLakeStorageDaily) locLakeFile.close();
     if (options.outLocWetlStorageDaily) locWetlFile.close();
     if (options.outGloLakeStorageDaily) gloLakeFile.close();
     if (options.outResStorageDaily && (options.resOpt == 1))
-        gloResFile.close(); // neue OUTPUT-Option
+        gloResFile.close();
     if (options.outGloWetlStorageDaily) gloWetlFile.close();
 }
-// end ~routingClass
 

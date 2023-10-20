@@ -27,4 +27,5 @@
 //#define ng_glolakcells 1170 /*no of lakecells in wg_big_lakes_area_frac.txt*/
 			    /*for no allocation of glolakestorage define to zero!*/
 
+
 #endif

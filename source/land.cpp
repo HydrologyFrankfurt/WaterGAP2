@@ -9,27 +9,21 @@
 * see former changes at file land.cpp.versioninfos.txt
 *
 ***********************************************************************/
-#include <iostream>
-#include <fstream>
+//#include <iostream>
+//#include <fstream>
 #include <cstdio>
-
-#include "gridio.h"
+#include "common.h"
 #include "def.h"
-
-#include "land.h"
+#include "globals.h"
+//#include "land.h"
 using namespace std;
 
-void landClass::init(const char *input_dir)
+void landClass::init(const std::string input_dir)
 {
-	extern gridioClass gridIO;
-	char filename[250];
-
 	// built up area e.g. cities, fraction of cell area (0-1)
-	sprintf(filename, "%s/GBUILTUP.UNF0", input_dir);
-        //gridIO.readUnfFile(filename, ng_land, G_built_up);
-        gridIO.readUnfFile(filename, ng, G_built_up);
+	G_built_up.read(input_dir + "/GBUILTUP.UNF0");
 
-// not used any more in WG2.2	
+	// not used any more in WG2.2
 	//
 	//  read potential vegetation        
 	//                                   
@@ -48,8 +42,6 @@ void landClass::init(const char *input_dir)
 	// 18: Tropical woodland             
 	// 19: Tropical forest                 
 
-	//sprintf(filename, "%s/GPOTVEG_PROX.UNF1", input_dir);
-	//gridIO.readUnfFile(filename, ng, &G_potVegetation[0]);
 	// the GPOTVEG_PROX file also contains vegetation for the lake areas
 	// because we need it to decide whether the area is arid or humid
 	// in the evapotransiration calculations
@@ -103,61 +95,25 @@ void landClass::init(const char *input_dir)
 	// 16: Barren or sparsely vegetated
 	// 17: Water bodies (for WaterGAP lake cells only)
 
-// not used any more in WG2.2	
-//	sprintf(filename, "%s/GLCT_1970.UNF1", input_dir);
-//	gridIO.readUnfFile(filename, ng_land, G_landCover22);
-// not used any more in WG2.2	
 	/* WaterGAP2.2 */
-    sprintf(filename, "%s/G_LANDCOVER.UNF1", input_dir); // Renamed landcover input (as GLCC is not any longer source but MODIS)
-        //gridIO.readUnfFile(filename, ng_land, G_landCover22);
-        gridIO.readUnfFile(filename, ng, G_landCover22);
+	// Renamed landcover input (as GLCC is not any longer source but MODIS)
+	G_landCover22.read(input_dir +"/G_LANDCOVER.UNF1");
 
 	// if the cell is a land cell, then landcover is used
 	// otherwise potential vegetation from IMAGE 2.2 is used
-	int n;
-
-        //for (n = 0; n < ng_land; n++)
-        for (n = 0; n < ng; n++)
+    for (int n = 0; n < ng; n++)
 		G_landCover[n] = G_landCover22[n];
-
-	// add class "water bodies" to lake cells
-        //for (n = ng_land; n < ng; n++)
-                //G_landCover[n] = 17; // add class "water bodies" to lake cells
-// not used any more in WG2.2	
-	// add pot. vegatation to lake cells
-	//for (n = ng_land; n < ng; n++)
-	//	G_landCover[n] = G_potVegetation[n];
-// not used any more in WG2.2	
 }
 
-void landClass::readLandCoverMap(int actual_year, const char *land_cover_dir)
+void landClass::readLandCoverMap(int actual_year, const std::string land_cover_dir)
 {
-	extern gridioClass gridIO;
-	char filename[250];
+	G_landCover22.read(string(land_cover_dir) + "/GLCT_" + to_string(actual_year) + ".UNF1");
 
-	sprintf(filename, "%s/GLCT_%d.UNF1", land_cover_dir, actual_year);
-        //gridIO.readUnfFile (filename, ng_land, G_landCover22);
-        gridIO.readUnfFile (filename, ng, G_landCover22);
-
-	long n;
-	// add land use values from GLCT to land cells
-        //for (n = 0; n < ng_land; n++)
-        for (n = 0; n < ng; n++)
-		G_landCover[n] = G_landCover22[n]; // WaterGAP3.1
-
-	// add class "water bodies" to lake cells
-        //for (n = ng_land; n < ng; n++)
-        //	G_landCover[n] = 17; // add class "water bodies" to lake cells
-
+    for (long n = 0; n < ng; n++)
+		G_landCover[n] = G_landCover22[n];
 }
 
-void landClass::initPM(const char *input_dir)
+void landClass::initPM(const std::string input_dir)
 {
-	extern gridioClass gridIO;
-	char filename[250];
-
-	G_altitude = new short[ng];
-
-	sprintf(filename, "%s/G_ALTITUDE.UNF2", input_dir);
-	gridIO.readUnfFile(filename, ng, G_altitude);
+	G_altitude.read(input_dir + "/G_ALTITUDE.UNF2");
 }
