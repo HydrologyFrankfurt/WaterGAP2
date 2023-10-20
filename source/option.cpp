@@ -1,4 +1,3 @@
-
 /***********************************************************************
 *
 *many new options and output options by Frank Voss, Stephanie Eisner, Martina
@@ -12,127 +11,114 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
-#include <iostream>
-#include <fstream>
+//#include <iostream>
+//#include <fstream>
 #include "def.h"
 #include "timestring.h"  // HMS MODEL_SETTINGS output
 #include "stack.h" // HMS 2013-11-21 SINGLECELL output
-#include "geo.h" // HMS 2013-11-21 SINGLECELL output
-#include "routing.h" // HMS 2013-11-21 SINGLECELL output
-#include "land.h" // HMS 2013-11-21 SINGLECELL output
+#include "configFile.h" // HMS to run CDA approach
+#include "common.h"
+#include "globals.h"
 
-#include "option.h"
+//Check for pregenerated git commit hash in gitcommit.h (script get_git_commit_hash.sh to execute
+// before build in the IDE of choice)
+#if __has_include("gitcommit.h")
+#include "gitcommit.h"
+#else
+static const char* GIT_COMMIT_HASH = "Git version information not generated.";
+#endif
+
 using namespace std;
 
-void optionClass::init(int option_c,  char* option_v[])
+void optionClass::init(ConfigFile configFile)
 {
 	FILE *file_ptr;
-	filename_data		= new char[50];
-	filename_time		= new char[50];
-	filename_opt		= new char[50];
-	filename_out_opt	= new char[50];
-	filename_stations	= new char[50];
-	filename_singlecells	= new char[50];	         // HMS 2013-11-21 for outputs at predefined IMAGE-Nr
-    filename_scout_opt      = new char[50];            // HMS 2013-11-21 output options for single cell out
     char option[6];      // to process options, e.g. "-d", "-t", "-o", "-r", "-s", "-c", "-u"
   	char optionValue[50]; // option value (filenames)
 	char string[250];
 
 	// ==== for variable land cover map
 	landCoverYearsInList = 0;
-	landCoverYears       = NULL;
-	landCoverYearsStart  = NULL;
-	landCoverYearsEnd    = NULL;
 
+    /*
 	// default files
-	strcpy(filename_data, "DATA.DIR");
-	strcpy(filename_time,"TIME.DAT");
-	strcpy(filename_opt,"OPTIONS.DAT");
-	strcpy(filename_out_opt,"OUTPUT_OPTIONS.DAT");
-	strcpy(filename_stations,"STATIONS.DAT");
-	strcpy(filename_singlecells,"SINGLECELLS.DAT"); // HMS 2013-11-21 for outputs at predefined IMAGE-Nr
-    strcpy(filename_scout_opt,"SINGLECELL_OUTPUT_OPTIONS.DAT");
-        //----- check command line for filenames
-	// MH20160601N001 Workaround for correct optional reading of option/settings file names as arguments
+	filename_data = "DATA.DIR";
+	filename_time = "TIME.DAT";
+	filename_opt = "OPTIONS.DAT";
+	filename_out_opt = "OUTPUT_OPTIONS.DAT";
+	filename_stations = "STATIONS.DAT";
+	filename_singlecells = "SINGLECELLS.DAT"; // for outputs at predefined IMAGE-Nr
+    filename_scout_opt = "SINGLECELL_OUTPUT_OPTIONS.DAT";
+
+    //----- check command line for filenames
+
+	// Workaround for correct optional reading of option/settings file names as arguments
   	if (option_c) {
-        //  Modification Number: MH20160601N001 (part-3)
-
-        //stopped code block : start
-        /*
-        //cout << "CHECK option_c: '" << option_c << "'" << endl;
-    	for (int i=0; i<option_c; i++) {
-      		// seperate option and option value
-  			strcpy(option, option_v[i]);
-            // cout << "CHECK option: '" << option << "'" << endl;
-            // cout << "CHECK option_v[i]: '" << option_v[i] << "'" << endl;
-			option[2]=0;                                // cut string at 3rd position
-  			strcpy(optionValue, option_v[i]+2);
-            // cout << "CHECK option_v[i]+2: '" << option_v[i]+2 << "'" << endl;
-            // cout << "CHECK option: '" << option << "'" << endl;
-            // cout << "CHECK optionValue: '" << optionValue << "'" << endl;
-		  	// check DATA.DIR file
-
-        */
- 		// end of stopped block
-
- 		// new code block: start
-
- 		// end of new code
-        // FP20161018N001 Evaluation of arguments since first argument
+        // Evaluation of arguments since first argument
         // Do not extract again the parameter file, as this has been done before, possibly without option switch "-p")
         for (int i = 1; i < option_c - 1; i++) {
             strcpy(option, option_v[i]);
             strcpy(optionValue, option_v[i+1]);
- 		// end of part-3 of MH20160601N001
 
  			if (!strcmp(option, "-d")){
-				strncpy(filename_data, optionValue, 50);
+				filename_data = std::string(optionValue);
  			}
 		  	// check TIME.DAT file
   			if (!strcmp(option, "-t")){
-				strncpy(filename_time, optionValue, 50);
+				filename_time = std::string(optionValue);
  			}
  		  	// check OPTIONS.DAT file
  			if (!strcmp(option, "-o")){
-				strncpy(filename_opt, optionValue, 50);
+				filename_opt = std::string(optionValue);
  			}
  		  	// check OUTPUT_OPTIONS.DAT file
  			if (!strcmp(option, "-r")){
- 				strncpy(filename_out_opt, optionValue, 50);
+				filename_out_opt = std::string(optionValue);
  			}
  		  	// check STATIONS.DAT file
  			if (!strcmp(option, "-s")){
- 				strncpy(filename_stations, optionValue, 50);
+				filename_stations = std::string(optionValue);
  			}
  		  	// check SINGLECELLS.DAT file
  			if (!strcmp(option, "-c")){
- 				strncpy(filename_singlecells, optionValue, 50);
-                        }
-                        // check SINGLECELL_OUTPUT_OPTIONS.DAT file
-                        if (!strcmp(option, "-u")){
-                                strncpy(filename_scout_opt, optionValue, 50);
-                        }
+				filename_singlecells = std::string(optionValue);
+			}
+			// check SINGLECELL_OUTPUT_OPTIONS.DAT file
+			if (!strcmp(option, "-u")){
+				filename_scout_opt = std::string(optionValue);
+			}
 		}
   	}
 
 	// the file DATA.DIR contains path names of
 	// the directories for input, output,
 	// climate input and routing files
-	file_ptr = fopen(filename_data, "r");
-	if (file_ptr != NULL) {
-		printf("Reading %s:\n", filename_data);
-		fscanf(file_ptr, "%s", input_dir);
-		fscanf(file_ptr, "%s", output_dir);
-		fscanf(file_ptr, "%s", climate_dir);
-		fscanf(file_ptr, "%s", routing_dir);
-		fscanf(file_ptr, "%s", water_use_dir);
-		fscanf(file_ptr, "%s", land_cover_dir);
-		fclose(file_ptr);
+	std::ifstream file(filename_data);
+	if (file.is_open()) {
+		cout << "Reading " << filename_data << ":\n";
+		std::getline(file, input_dir);
+		std::getline(file, output_dir);
+		std::getline(file, climate_dir);
+		std::getline(file, routing_dir);
+		std::getline(file, water_use_dir);
+		std::getline(file, land_cover_dir);
+		file.close();
 	} else {
 		cerr << "Unable to open file:" << filename_data << endl;
 		exit(-1);
 	}
-
+    */
+    // enable reading config.txt
+    filename_opt = configFile.runtimeoptionsfile.c_str();
+    filename_out_opt = configFile.outputoptionsfile.c_str();
+    filename_stations =configFile.stationsfile.c_str();
+    input_dir = configFile.inputDir.c_str();
+    output_dir = configFile.outputDir.c_str();
+    climate_dir = configFile.climateDir.c_str();
+    glacier_dir = configFile.glacierDir.c_str();
+    routing_dir = configFile.routingDir.c_str();
+    water_use_dir = configFile.wateruseDir.c_str();
+    land_cover_dir = configFile.landcoverDir.c_str();
 
 	// set default options
 	// which will be used, when OPTIONS.DAT is not found
@@ -142,8 +128,6 @@ void optionClass::init(int option_c,  char* option_v[])
 	grid_store_TypeForStorages = 0;
 	day_store 		= 0;
 	cloud 			= 0;
-	raindays 		= 0;
-	prec_correct 	= 0;
 	intercept 		= 0;
 	calc_albedo		= 0;
 	rout_prepare 	= 1;
@@ -156,31 +140,34 @@ void optionClass::init(int option_c,  char* option_v[])
 	petOpt 			= 0;
 	clclOpt 		= 0;
 	permaOpt 		= 0;
-        resOpt   		= 0;
+    resOpt   		= 0;
 	landCoverOpt    = 0;
 	use_kc          = 0;
-        statcorrOpt     = 0;
-        aridareaOpt     = 0;
-        fractionalRoutingOpt     = 0;
-        riverEvapoOpt   = 0;
-		aggrNUsGloLakResOpt = 1;
-		gammaHBV_CorrOpt = 1;
-    // FP20161018N003 Enable reading input data from climate land mask
+	statcorrOpt     = 0;
+	aridareaOpt     = 0;
+	fractionalRoutingOpt     = 0;
+	riverEvapoOpt   = 0;
+	aggrNUsGloLakResOpt = 1;
+
+    // Enable reading input data from climate land mask
     climate_spatial_resolution = 0;
-    // FP20161018N002 Reservoir operation start years
+
+    // Reservoir operation start years
     resYearOpt      = 0;
     resYearReference      = 2000;
     resYearFirstToUse     = 1900;
     resYearLastToUse      = 2010;
     antNatOpt      = 0;
-    // FP20161018N004 Net use / net abstraction for reservoir algorithm: new filename
+
+    // Net use / net abstraction for reservoir algorithm: new filename
     resNUsMeanYearFirst = 1971;
     resNUsMeanYearLast = 2000;
+    glacierOpt = 0;
 
 	// read OPTIONS.DAT
-	file_ptr = fopen(filename_opt, "r");
+	file_ptr = fopen(configFile.runtimeoptionsfile.c_str(), "r");
 	if (file_ptr != NULL) {
-		printf("Reading %s:\n", filename_opt);
+		cout << "Reading " << filename_opt << ":\n";
 		int i = 0, n;
 
 		while (fgets(string, 250, file_ptr))
@@ -270,66 +257,23 @@ void optionClass::init(int option_c,  char* option_v[])
 					case 1:
 						printf("   Daily time series (.365) according to 'TIME.DAT'.\n");
 						break;
-					case 2:
-						printf("   Daily precip time series (.31) but monthly time series according to 'TIME.DAT'.\n");
-						break;
-					case 3:
-						printf("   Daily precip time series (.365) but monthly time series according to 'TIME.DAT'.\n");
-						break;
-					case 4:
-						printf("   Monthly time series according to 'TIME.DAT'.\n");
-						break;
-					case 5:
-						printf("   Averages for climate normal period.\n");
-						break;
-					case 6:
-						printf("   Averages for period given in 'TIME.DAT'.\n");
-						break;
 					}
 				}
 				if (7 == i) {
 					cloud = n;
 					switch (n) {
 					case 0:
-						printf("   Sunshine percentage will be used.\n");
-						break;
-					case 1:
-						printf("   Cloudiness will be used.\n");
-						break;
-					case 2:
 						printf("   Observed incoming short wave radiation and net long wave radiation will be used.\n");
 						break;
-					case 3:
+					case 1:
 						printf("   Observed incoming short wave radiation and incoming long wave radiation will be used.\n");
 						break;
-					case 4:
+					case 2:
 						printf("   Observed radiation (only incoming short-wave) will be used.\n");
 						break;
 					}
 				}
 				if (8 == i) {
-					raindays = n;
-					switch (n) {
-					case 0:
-						printf("   Daily rain linearly interpolated from monthly values.\n");
-						break;
-					case 1:
-						printf("   'Number of rain days' will be considered for daily rain.\n");
-						break;
-					}
-				}
-				if (9 == i) {
-					prec_correct = n;
-					switch (n) {
-					case 0:
-						printf("   Precipitation will not be corrected.\n");
-						break;
-					case 1:
-						printf("   Precipitation will be corrected after Adam & Lettenmaier (usage recommended only for precip input which is not yet corrected, e.g. GPCC).\n");
-						break;
-					}
-				}
-				if (10 == i) {
 					intercept = n;
 					switch (n) {
 					case 0:
@@ -340,7 +284,7 @@ void optionClass::init(int option_c,  char* option_v[])
 						break;
 					}
 				}
-				if (11 == i) {
+				if (9 == i) {
 					calc_albedo = n;
 					switch (n) {
 					case 0:
@@ -351,7 +295,7 @@ void optionClass::init(int option_c,  char* option_v[])
 						break;
 					}
 				}
-				if (12 == i) {
+				if (10 == i) {
 					petOpt = n;
 					switch (n) {
 					case 0:
@@ -375,9 +319,12 @@ void optionClass::init(int option_c,  char* option_v[])
 					case 6: 		//mw-PT humid/arid ueber RH
 						printf("   PET: PT (arid areas based on RH) \n");
 						break;
+                    case 7:	  // milly-dunne scheme for climate change studies
+						printf("   PET: Milly-Dunne scheme \n");
+                        break;
 					}
 				}
-				if (13 == i) {
+				if (11 == i) {
 					use_kc = n;
 					switch (n) {
 					case 0:
@@ -388,7 +335,7 @@ void optionClass::init(int option_c,  char* option_v[])
 						break;
 					}
 				}
-				if (14 == i) {
+				if (12 == i) {
 					landCoverOpt = n;
 					switch (n) {
 					case 0:
@@ -399,7 +346,7 @@ void optionClass::init(int option_c,  char* option_v[])
 						break;
 					}
 				}
-				if (15 == i) {
+				if (13 == i) {
 					rout_prepare = n;
 					switch (n) {
 					case 0:
@@ -410,7 +357,7 @@ void optionClass::init(int option_c,  char* option_v[])
 						break;
 					}
 				}
-				if (16 == i) {
+				if (14 == i) {
 					timeStepCheckFlag = n;
 					switch (n) {
 					case 0:
@@ -421,7 +368,7 @@ void optionClass::init(int option_c,  char* option_v[])
 						break;
 					}
 				}
-				if (17 == i) {
+				if (15 == i) {
 					riverveloOpt = n;
 					switch (n) {
 					case 0:
@@ -435,7 +382,7 @@ void optionClass::init(int option_c,  char* option_v[])
                         break;
 					}
 				}
-				if (18 == i) {
+				if (16 == i) {
 					subtract_use = n;
 					switch (n) {
 					case 0:
@@ -455,7 +402,7 @@ void optionClass::init(int option_c,  char* option_v[])
 						break;
 					}
 				}
-				if (19 == i) {
+				if (17 == i) {
 					use_alloc = n;
 					switch (n) {
 					case 0:
@@ -466,7 +413,7 @@ void optionClass::init(int option_c,  char* option_v[])
 						break;
 					}
 				}
-				if (20 == i) {
+				if (18 == i) {
 					delayedUseSatisfaction = n;
 					switch (n) {
 					case 0:
@@ -477,7 +424,7 @@ void optionClass::init(int option_c,  char* option_v[])
 						break;
 					}
 				}
-				if (21 == i) {
+				if (19 == i) {
 					clclOpt = n;
 					switch (n) {
 					case 0:
@@ -488,7 +435,7 @@ void optionClass::init(int option_c,  char* option_v[])
 						break;
 					}
 				}
-				if (22 == i) {
+				if (20 == i) {
 					permaOpt = n;
 					switch (n) {
 					case 0:
@@ -500,172 +447,189 @@ void optionClass::init(int option_c,  char* option_v[])
 					}
 				}
 
-				if (23 == i) {
+				if (21 == i) {
 					resOpt = n;
 					switch (n) {
 					case 0:
-						printf("   Reservoirs will be treated as global lakes.\n");
+						printf("   Reservoirs will not be considered.\n");
 						break;
 					case 1:
-						printf("   New reservoir algorithm will be used.\n");
+						printf("   Reservoir algorithm (adapted from Hanasaki et al. 2006) will be used.\n");
 						break;
 					}
 				}
 
-                                if (24 == i) {
-                                        statcorrOpt = n;
-                                        switch (n) {
-                                        case 0:
-                                                printf("   Station correction will be switched off.\n");
-                                                break;
-                                        case 1:
-                                                printf("   Station correction will be used.\n");
-                                                break;
-                                        }
-                                }
+				if (22 == i) {
+						statcorrOpt = n;
+						switch (n) {
+						case 0:
+								printf("   Station correction will be switched off.\n");
+								break;
+						case 1:
+								printf("   Station correction will be used.\n");
+								break;
+						}
+				}
 
-                                if (25 == i) {
-                                        aridareaOpt = n;
-                                        switch (n) {
-                                        case 0:
-                                                printf("   No groundwater recharge below surface water bodies in arid / semi-arid regions.\n");
-                                                break;
-                                        case 1:
-                                                printf("   Additional groundwater recharge below surface water bodies in arid / semi-arid regions.\n");
-                                                break;
-                                        }
-                                }
+				if (23 == i) {
+						aridareaOpt = n;
+						switch (n) {
+						case 0:
+								printf("   No groundwater recharge below surface water bodies in arid / semi-arid regions.\n");
+								break;
+						case 1:
+								printf("   Additional groundwater recharge below surface water bodies in arid / semi-arid regions.\n");
+								break;
+						}
+				}
 
-                                if (26 == i) {
-                                        fractionalRoutingOpt = n;
-                                        switch (n) {
-                                        case 0:
-                                                printf("   No modified routing of groundwater outflow and fast runoff.\n");
-                                                break;
-                                        case 1:
-                                                printf("   Groundwater outflow and fast runoff will be routed in dependance on current size of surface water bodies.\n");
-                                                break;
-                                        }
+				if (24 == i) {
+						fractionalRoutingOpt = n;
+						switch (n) {
+						case 0:
+                                if(aridareaOpt == 1){
+                                    fractionalRoutingOpt = 1;
+                                    printf("   'fractionalRoutingOpt' (currently 0) is set to 1 to avoid 'water cycling' of GWRswb.\n");
+                                    printf("   Routing of groundwater outflow and fast runoff will be modified depending on current size of surface water bodies.\n");
                                 }
-								if (27 == i) {
-                                        riverEvapoOpt = n;
-                                        switch (n) {
-                                        case 0:
-                                                printf("   No evaporation from rivers.\n");
-                                                break;
-                                        case 1:
-                                                printf("   Evaporation from rivers is allowed.\n");
-                                                break;
-                                        }
+                                else {
+                                    printf("   No modified routing of groundwater outflow and fast runoff.\n");
                                 }
-								if (28 == i) {
-                                        aggrNUsGloLakResOpt = n;
-                                        switch (n) {
-                                        case 0:
-                                                printf("   NUs of riparian cells of global lakes/reservoirs is not taken into account.\n");
-                                                break;
-                                        case 1:
-                                                printf("   NUs of riparian cells of global lakes/reservoirs is taken into account.\n");
-                                                break;
-                                        }
-								}
-								if (29 == i) {
-                                        gammaHBV_CorrOpt = n;
-                                        switch (n) {
-                                        case 0:
-                                                printf("   G_gammaHBV is not corrected.\n");
-                                                break;
-                                        case 1:
-                                                printf("   G_gammaHBV is corrected.\n");
-                                                break;
-                                        }
-								}
+								break;
+						case 1:
+								printf("   Routing of groundwater outflow and fast runoff will be modified depending on current size of surface water bodies.\n");
+								break;
+						}
+				}
+				if (25 == i) {
+						riverEvapoOpt = n;
+						switch (n) {
+						case 0:
+								printf("   No evaporation from rivers.\n");
+								break;
+						case 1:
+								printf("   Evaporation from rivers is allowed.\n");
+								break;
+						}
+				}
+				if (26 == i) {
+						aggrNUsGloLakResOpt = n;
+						switch (n) {
+						case 0:
+								printf("   NUs of riparian cells of global lakes/reservoirs is not taken into account.\n");
+								break;
+						case 1:
+								printf("   NUs of riparian cells of global lakes/reservoirs is taken into account.\n");
+								break;
+						}
+				}
+				if (27 == i) {
+					climate_spatial_resolution = n;
+					switch (n) {
+					case 0:
+						printf("   Climate will be read from traditional WaterGAP land mask (SLM or WLM).\n");
+						break;
+					case 1:
+						printf("   Climate will be read from climate land mask.\n");
+						break;
+					}
+				}
+				if (28 == i) {
+						resYearOpt = n;
+						switch (n) {
+						case 0:
+								printf("   Reservoir operation start year is not considered.\n");
+								break;
+						case 1:
+								printf("   Reservoirs are becoming active in their start operation year (*)\n");
+								break;
+						}
+				}
+				if (29 == i) {
+						resYearReference = n;
+						printf("   If reservoir operation start year is not considered (resYearOpt == 0), then use reservoir status from reference year %d).\n", resYearReference);
+				}
 
-                                // FP20161018N003 Enable reading input data from climate land mask
-                                if (30 == i) {
-                                    climate_spatial_resolution = n;
-                                    switch (n) {
-                                    case 0:
-                                        printf("   Climate will be read from traditional WaterGAP land mask (SLM or WLM).\n");
-                                        break;
-                                    case 1:
-                                        printf("   Climate will be read from climate land mask.\n");
-                                        break;
-                                    }
-                                }
+				if (30 == i) {
+						resYearFirstToUse = n;
+						printf("   If reservoir operation start year is considered (resYearOpt == 1), use this year as first status of reservoirs: %d).\n", resYearFirstToUse);
+				}
 
-                                // FP20161018N001 Reservoir start operation years
-                                if (31 == i) {
-                                        resYearOpt = n;
-                                        switch (n) {
-                                        case 0:
-                                                printf("   Reservoir operation start year is not considered.\n");
-                                                break;
-                                        case 1:
-                                                printf("   Reservoirs are becoming active in their start operation year (*)\n");
-                                                break;
-                                        }
-                                }
+				if (31 == i) {
+						resYearLastToUse = n;
+						printf("   If reservoir operation start year is considered (resYearOpt == 1), use this year as last status of reservoirs: %d).\n", resYearLastToUse);
+				}
 
-                                if (32 == i) {
-                                        resYearReference = n;
-                                        printf("   If reservoir operation start year is not considered (resYearOpt == 0), then use reservoir status from reference year %d).\n", resYearReference);
-                                }
+				if (32 == i) {
+						antNatOpt = n;
+						switch (n) {
+						case 0:
+								printf("   Anthropogenic run (reservoirs are considered (ResOpt==1) or treated as global lakes (ResOpt==0) (*).\n");
+								break;
+						case 1:
+								printf("   Naturalized run (no consideration of reservoirs and water use): set subtract_use = 0.\n");
+								subtract_use = 0;
+								break;
+						}
+				}
+				if (33 == i) {
+						resNUsMeanYearFirst = n;
+						printf("   First year %d of average net abstraction from surface water NUs for reservoir algorithm calculation of mean demand (e.g. G_NUs_1971_2000.UNF0, with option 23: resOpt == 1)\n", resNUsMeanYearFirst);
+				}
 
-                                if (33 == i) {
-                                        resYearFirstToUse = n;
-                                        printf("   If reservoir operation start year is considered (resYearOpt == 1), use this year as first status of reservoirs: %d).\n", resYearFirstToUse);
-                                }
+				if (34 == i) {
+						resNUsMeanYearLast = n;
+						printf("   Last year %d of average net abstraction from surface water NUs for reservoir algorithm calculation of mean demand (e.g. G_NUs_1971_2000.UNF0, with option 23: resOpt == 1)\n", resNUsMeanYearLast);
+				}
 
-                                if (34 == i) {
-                                        resYearLastToUse = n;
-                                        printf("   If reservoir operation start year is considered (resYearOpt == 1), use this year as last status of reservoirs: %d).\n", resYearLastToUse);
-                                }
+                if (35 == i) {
+                    calc_wtemp = n;
+                    switch (n) {
+                        case 0:
+                            printf("   Water temperatures are not calculated: set calc_wtemp = 0.\n");
+                            break;
+                        case 1:
+                            printf("   Water temperatures are calculated: set calc_wtemp = 1. Fractional routing is set to 1.\n");
+                            fractionalRoutingOpt = 1;
+                            break;
+                        case 2:
+                            if(antNatOpt == 1){
+                                printf("   Water temperatures are calculated but power plants are not considered due to naturalized run: set calc_wtemp = 1. Fractional routing is set to 1.\n");
+                                calc_wtemp = 1;
+                                fractionalRoutingOpt = 1;
+                            }
+                            else {
+                                printf("   Water temperatures are calculated with power plants considered: set calc_wtemp = 2. Fractional routing is set to 1.\n");
+                                fractionalRoutingOpt = 1;
+                            }
+                            break;
+                    }
+                }
 
-                                if (35 == i) {
-                                        antNatOpt = n;
-                                        switch (n) {
-                                        case 0:
-                                                printf("   Anthropogenic run (reservoirs are considered (ResOpt==1) or treated as global lakes (ResOpt==0) (*).\n");
-                                                break;
-                                        case 1:
-                                                printf("   Naturalized run (no consideration of reservoirs and water use): set subtract_use = 0.\n");
-                                                subtract_use = 0;
-                                                break;
-                                        }
-                                }
-
-                                if (36 == i) {
-                                        resNUsMeanYearFirst = n;
-                                        printf("   First year %d of average net abstraction from surface water NUs for reservoir algorithm calculation of mean demand (e.g. G_NUs_1971_2000.UNF0, with option 23: resOpt == 1)\n", resNUsMeanYearFirst);
-                                }
-
-                                if (37 == i) {
-                                        resNUsMeanYearLast = n;
-                                        printf("   Last year %d of average net abstraction from surface water NUs for reservoir algorithm calculation of mean demand (e.g. G_NUs_1971_2000.UNF0, with option 23: resOpt == 1)\n", resNUsMeanYearLast);
-                                }
-
-
+				if (36 == i) {
+						glacierOpt = n;
+						switch (n) {
+						case 0:
+								printf("   Glaciers are not considered.\n");
+								break;
+						case 1:
+								printf("   Glacier input data and water balance of glaciers are considered.\n");
+								break;
+						}
+				}
 			}
-            // end if (string search for "Value")
-        // end while (line reading from option file)
 		fclose(file_ptr);
 	} else {
-		printf("\nError while opening file '%s'.\n", filename_opt);
+		printf("\nError while opening file '%s'.\n", filename_opt.c_str());
 		printf("Using default options.\n");
 	}
-    if (((0 == time_series) || (1 == time_series)) && (cloud < 2)) {
-        cerr << "Wrong setup in OPTIONS.DAT: Sunshine percentage or cloudiness can only be used in combination with monthly climate input.\n" << endl;
-        cerr << "(((0 == time_series) || (1 == time_series)) && (cloud < 2))" << endl;
-        exit (-1);
-    }
+
     if ((1 == use_kc) && (1 == calc_albedo)) {
         cerr << "Wrong setup in OPTIONS.DAT: Crop coefficients (Kc) cannot be used in combination with variable albedo.\n" << endl;
         cerr << "((1 == use_kc) && (1 == calc_albedo))" << endl;
         exit (-1);
     }
 
-    // FP20161018N002 Reservoir operation start years
     if (resYearFirstToUse > resYearLastToUse) {
         cerr << "Wrong setup in OPTIONS.DAT: Reservoir operation last year to use: " << resYearLastToUse << " is smaller than first year to use: " << resYearFirstToUse << endl;
         cerr << "Please change accordingly: last year AFTER first year" << endl;
@@ -679,84 +643,78 @@ void optionClass::init(int option_c,  char* option_v[])
         exit (-1);
     }
 
-    // FP20161018N003 Enable reading input data from climate land mask
-    if ((6 == time_series) && (1 == climate_spatial_resolution)) {
-        cerr << "Wrong setup in OPTIONS.DAT: Calculation of averages from climate land mask not yet implemented, exit program execution.\n" << endl;
-        cerr << "((6 == time_series) && (1 == climate_spatial_resolution))" << endl;
-        exit (-1);
-    }
+	// read TIME.DAT obsolete, time settings are read in in config.txt
+	/**file_ptr = fopen(filename_time.c_str(), "r");
+	if (file_ptr != NULL) {
+		printf("Reading %s:\n", filename_time.c_str());
+		fgets(string, 250, file_ptr);
+		fscanf(file_ptr, "%hi", &start_year);
+		fgets(string, 250, file_ptr);
+		fscanf(file_ptr, "%hi", &end_year);
+		fgets(string, 250, file_ptr);
+		fscanf(file_ptr, "%hi", &evalStartYear);
+		fgets(string, 250, file_ptr);
+		fscanf(file_ptr, "%hi", &init_years);
+		fgets(string, 250, file_ptr);
+		fscanf(file_ptr, "%hi", &time_step);
+		fgets(string, 250, file_ptr);
 
-	// read TIME.DAT
-	if (time_series != 5) {
-		file_ptr = fopen(filename_time, "r");
-		if (file_ptr != NULL) {
-			printf("Reading %s:\n", filename_time);
-			fgets(string, 250, file_ptr);
-			fscanf(file_ptr, "%hi", &start_year);
-			fgets(string, 250, file_ptr);
-			fscanf(file_ptr, "%hi", &end_year);
-			fgets(string, 250, file_ptr);
-			fscanf(file_ptr, "%hi", &evalStartYear);
-			fgets(string, 250, file_ptr);
-			fscanf(file_ptr, "%hi", &init_years);
-			fgets(string, 250, file_ptr);
-			fscanf(file_ptr, "%hi", &time_step);
-			fgets(string, 250, file_ptr);
+		// variable land cover map
+		if (landCoverOpt) {
 
-			// ==== for variable land cover map
-			if (landCoverOpt) {
-
-				fscanf(file_ptr, "%hi", &landCoverYearsInList);
-				if (landCoverYearsInList==0) {
-					cerr << "no year list for  variable land cover map!" << endl;
-					exit (-1);
-				}
-				fgets(string, 250, file_ptr);
-
-				landCoverYears      = new short[landCoverYearsInList];
-				landCoverYearsStart = new short[landCoverYearsInList];
-				landCoverYearsEnd   = new short[landCoverYearsInList];
-
-				for (int t_step=0; t_step<landCoverYearsInList; t_step++)
-					fscanf(file_ptr, "%hi", &landCoverYears[t_step]);
-
-				for (int t_step=0; t_step<landCoverYearsInList; t_step++) {
-					if (t_step==0)
-						if (landCoverYears[t_step]<start_year) landCoverYearsStart[t_step] = landCoverYears[t_step];
-						else landCoverYearsStart[t_step] = start_year;
-					else
-						landCoverYearsStart[t_step] = landCoverYearsEnd[t_step-1]+1;
-
-					if (t_step==landCoverYearsInList-1)
-						landCoverYearsEnd[t_step]=end_year;
-					else
-						landCoverYearsEnd[t_step]=(int)((landCoverYears[t_step+1]-landCoverYears[t_step])/2+0.5)+landCoverYears[t_step]-1;
-				} // for(year)
-
+			fscanf(file_ptr, "%hi", &landCoverYearsInList);
+			if (landCoverYearsInList==0) {
+				cerr << "no year list for  variable land cover map!" << endl;
+				exit (-1);
 			}
+			fgets(string, 250, file_ptr);
 
-			// ==== for variable land cover map
+			landCoverYears.clear();
+			landCoverYears.resize(landCoverYearsInList);
+			landCoverYearsStart.clear();
+			landCoverYearsStart.resize(landCoverYearsInList);
+			landCoverYearsEnd.clear();
+			landCoverYearsEnd.resize(landCoverYearsInList);
 
-			fclose(file_ptr);
-		} else {
-			printf("File '%s' not found! \n", filename_time);
-			start_year = 1961;
-			end_year = 1990;
-			evalStartYear = 1956;
-			init_years = 0;
-			time_step = 1;
-			landCoverOpt = 0; // ohne Liste von Jahren kann man keine Karten einlesen
-			cout <<"   const land cover map be used.\n";
+			for (int t_step=0; t_step<landCoverYearsInList; t_step++)
+				fscanf(file_ptr, "%hi", &landCoverYears[t_step]);
+
+			for (int t_step=0; t_step<landCoverYearsInList; t_step++) {
+				if (t_step==0)
+					if (landCoverYears[t_step]<start_year) landCoverYearsStart[t_step] = landCoverYears[t_step];
+					else landCoverYearsStart[t_step] = start_year;
+				else
+					landCoverYearsStart[t_step] = landCoverYearsEnd[t_step-1]+1;
+
+				if (t_step==landCoverYearsInList-1)
+					landCoverYearsEnd[t_step]=end_year;
+				else
+					landCoverYearsEnd[t_step]=(int)((landCoverYears[t_step+1]-landCoverYears[t_step])/2+0.5)+landCoverYears[t_step]-1;
+			}
 		}
+
+		fclose(file_ptr);
 	} else {
-		start_year = 1;
-		end_year = 1;
-		evalStartYear = 1;
-		init_years = 5;
+		printf("File '%s' not found! \n", filename_time.c_str());
+		start_year = 1961;
+		end_year = 1990;
+		evalStartYear = 1956;
+		init_years = 0;
 		time_step = 1;
 		landCoverOpt = 0; // ohne Liste von Jahren kann man keine Karten einlesen
-		cout <<"   const land cover map will be used.\n";
+		cout <<"   const land cover map be used.\n";
 	}
+
+     */ //HMS: end of commenting out usage of TIME.DAT
+    // introduce CDA (config.txt)
+    start_year      = configFile.startYear;
+    end_year     = configFile.endYear;
+    evalStartYear    = configFile.startYear;
+    init_years     = configFile.numInitYears;
+    time_step     = configFile.timeStep;
+    landCoverOpt     = 0;
+
+
 	printf("   Start year for calculations: %d\n", start_year);
 	printf("   Start year for evaluations:  %d\n", evalStartYear);
 	printf("   End year   : %d\n", end_year);
@@ -770,11 +728,6 @@ void optionClass::init(int option_c,  char* option_v[])
 			printf("   %d\t:\t%d\t-\t%d\n", landCoverYears[t_step], landCoverYearsStart[t_step], landCoverYearsEnd[t_step]);
 	}
 
-        if (6 == time_series)
-		mid_year = evalStartYear + (end_year - start_year) / 2;
-	else
-		mid_year = -99;
-
 	// read OUTPUT_OPTIONS.DAT
 	// set default output options
 	// monthly binary files
@@ -782,7 +735,7 @@ void optionClass::init(int option_c,  char* option_v[])
 	outAET                     = false;                        // 1
 	outCellAET                 = false;                        // 2
 	outCellRunoff              = false;                        // 3
-        outPotCellRunoffAnnual     = false;                        // 4
+    outPotCellRunoffAnnual     = false;                        // 4
 	outCellSurface             = false;                        // 5
 	outRunoff                  = false;                        // 6
 	outUrbanRunoff             = false;                        // 7
@@ -790,15 +743,14 @@ void optionClass::init(int option_c,  char* option_v[])
 	outGWRunoff                = false;                        // 9
 	outGWRecharge              = false;                        // 10
 	outSingleStorages          = false;                        // 11
-	//outGWStorage               = false;                        // 12 included in 11
-        outMinMaxRiverAvail	   = false;                        // 12
+    outMinMaxRiverAvail	   	   = false;                        // 12
 	outSoilWater               = false;                        // 13
 	outLAI                     = false;                        // 14
 	outAlbedo                  = false;                        // 15
 	outInterception            = false;                        // 16
 	outCanopyWater             = false;                        // 17
 	outmaxCanopyWater          = false;                        // 18
-        outRiverPET                = false;                        // 19
+    outRiverPET                = false;                        // 19
 	outNetShortWaveRadiation   = false;                        // 20
 	outNetLongWaveRadiation    = false;                        // 21
 	outNetRadiation            = false;                        // 22
@@ -815,8 +767,8 @@ void optionClass::init(int option_c,  char* option_v[])
 	outSnowMelt                = false;                        // 33
 	outSnowEvap                = false;                        // 34
 	outSurfStor                = false;                        // 35
-        outLocLakeStorage				   = false;                        // 36 x  included in 11
-        outLocWetlStorage					   = false;                        // 37 x  included in 11
+    outLocLakeStorage		   = false;                        // 36 x  included in 11
+    outLocWetlStorage		   = false;                        // 37 x  included in 11
 	outGloLakeStorage		   = false;                        // 38 x  included in 11
 	outGloWetlStorage		   = false;                        // 39 x  included in 11
 	outResStorage		       = false;                        // 40 x  included in 11
@@ -841,76 +793,87 @@ void optionClass::init(int option_c,  char* option_v[])
         outLocWetlExt              = false;                        // 59
         outGloWetlExt              = false;                        // 60
         outTotalGWR                = false;                        // 61
+        outGwrunSurfrun		       = false;						   // 62
+        outGlacArea                = false;                        // 63
+        outGlacAreaFrac            = false;                        // 64
+        outGlacPrecip              = false;                        // 65
+        outGlacRunoff              = false;                        // 66
+        outGlacierStorage          = false;                        // 67
 	// daily binary files
-        outPrecDaily               = false;                        // 62
-        outCellAETDaily            = false;                        // 63
-        outCellRunoffDaily         = false;                        // 64
-        outCellSurfaceDaily        = false;                        // 65
-        outSurfaceRunoffDaily      = false;                        // 66
-        outGWRunoffDaily           = false;                        // 67
-        outGWRechargeDaily         = false;                        // 68
-        outGWStorageDaily          = false;                        // 69
-        outSoilWaterDaily          = false;                        // 70
-        outLAIDaily                = false;                        // 71
-        outAlbedoDaily             = false;                        // 72
-        outInterceptionDaily       = false;                        // 73
-        outCanopyWaterDaily        = false;                        // 74
-        outmaxCanopyWaterDaily     = false;                        // 75
-        outExtRadiationDaily       = false;                        // 76
-        outShortDownRadiationDaily = false;                        // 77
-        outShortUpRadiationDaily   = false;                        // 78
-        outNetShortWaveRadiationDaily = false;                     // 79
-        outLongDownRadiationDaily  = false;                        // 80
-        outLongUpRadiationDaily    = false;                        // 81
-        outNetLongWaveRadiationDaily = false;                      // 82
-        outNetRadiationDaily       = false;                        // 83
-        outPETDaily                = false;                        // 84
-        outTotalPETDaily           = false;                        // 85
-        outRiverAvailDaily         = false;                        // 86
-        outRiverVeloDaily          = false;                        // 87
-        outSnowCoverDaily          = false;                        // 88
-        outSWEDaily                = false;                        // 89
-        outSnowFallDaily           = false;                        // 90
-        outSnowMeltDaily           = false;                        // 91
-        outSurfStorDaily           = false;                        // 92
-    outSingleStoragesDaily     = false;                            // 93
-    outTotalWaterInStoragesDaily_km3 = false;                      // 94
-    outTotalWaterInStoragesDaily_mm = false;                        // 95
-    outTotalWaterInStoragesStartEndDaily_km3    = false;            //96
-        outGwrSwbDaily				= false;	   // 97
-        outFswbDaily				= false;	   // 98
-        outLandAreaFracDaily			= false;	   // 99
-        outGwrunSurfrunDaily        = false;                        // 100
-        outCellAETWCaDaily          = false;                        // 101
-	// additional binary file
-    outGWFactor                = false;                        // 102
-    outRGmax                   = false;                        // 103
-    outmaxSoilWater            = false;                        // 104
-    outRootingDepth            = false;                        // 105
-    outClcl                    = false;                        // 106
-    outLAImax                  = false;                        // 107
-    outAirFrost                = false;                        // 108
-    outSurfaceFrost            = false;                        // 109
-    outRH                      = false;                        // 110
+        outPrecDaily               = false;                        // 68
+        outCellAETDaily            = false;                        // 69
+        outCellRunoffDaily         = false;                        // 70
+        outCellSurfaceDaily        = false;                        // 71
+        outSurfaceRunoffDaily      = false;                        // 72
+        outGWRunoffDaily           = false;                        // 73
+        outGWRechargeDaily         = false;                        // 74
+        outGWStorageDaily          = false;                        // 75
+        outSoilWaterDaily          = false;                        // 76
+        outLAIDaily                = false;                        // 77
+        outAlbedoDaily             = false;                        // 78
+        outInterceptionDaily       = false;                        // 79
+        outCanopyWaterDaily        = false;                        // 80
+        outmaxCanopyWaterDaily     = false;                        // 81
+        outExtRadiationDaily       = false;                        // 82
+        outShortDownRadiationDaily = false;                        // 83
+        outShortUpRadiationDaily   = false;                        // 84
+        outNetShortWaveRadiationDaily = false;                     // 85
+        outLongDownRadiationDaily  = false;                        // 86
+        outLongUpRadiationDaily    = false;                        // 87
+        outNetLongWaveRadiationDaily = false;                      // 88
+        outNetRadiationDaily       = false;                        // 89
+        outPETDaily                = false;                        // 90
+        outTotalPETDaily           = false;                        // 91
+        outRiverAvailDaily         = false;                        // 92
+        outRiverVeloDaily          = false;                        // 93
+        outSnowCoverDaily          = false;                        // 94
+        outSWEDaily                = false;                        // 95
+        outSnowFallDaily           = false;                        // 96
+        outSnowMeltDaily           = false;                        // 97
+        outSurfStorDaily           = false;                        // 98
+    outSingleStoragesDaily     = false;                            // 99
+    outTotalWaterInStoragesDaily_km3 = false;                      // 100
+    outTotalWaterInStoragesDaily_mm = false;                        // 101
+    outTotalWaterInStoragesStartEndDaily_km3    = false;            //102
+        outGwrSwbDaily				= false;	   // 103
+        outFswbDaily				= false;	   // 104
+        outLandAreaFracDaily			= false;	   // 105
+        outGwrunSurfrunDaily        = false;                        // 106
+        outCellAETWCaDaily          = false;                        // 107
+        outGlacierStorageDaily		= false;						// 108
+        outGlacierStorageDaily_mm   = false;                        // 109
+        outRedTemp                  = false;                        // 110
+        outTemp                     = false;                        // 111
+    // additional binary file
+    outGWFactor                = false;                        // 112
+    outRGmax                   = false;                        // 113
+    outmaxSoilWater            = false;                        // 114
+    outRootingDepth            = false;                        // 115
+    outClcl                    = false;                        // 116
+    outLAImax                  = false;                        // 117
+    outAirFrost                = false;                        // 118
+    outSurfaceFrost            = false;                        // 119
+    outRH                      = false;                        // 120
 	// ASCII files
-    outAllUpStations           = false;                        // 111
-    outDirectUpStations        = false;                        // 112
-    outRainDays                = false;                        // 113
-    outStationDischargeAnnual  = false;                        // 114
-    outStationDischargeMonthly = false;                        // 115
-    outStationList             = false;                        // 116 : not implemented yet
-    outSuperbasinClimate       = false;                        // 117
-    outResvoirMonthly          = false;                        // 118 x
+    outAllUpStations           = false;                        // 121
+    outDirectUpStations        = false;                        // 122
+    outRainDays                = false;                        // 123
+    outStationDischargeAnnual  = false;                        // 124
+    outStationDischargeMonthly = false;                        // 125
+    outStationList             = false;                        // 126 : not implemented yet
+    outSuperbasinClimate       = false;                        // 127
+    outResvoirMonthly          = false;                        // 128 x
+
 	// additional ASCII files (option: save daily values)
-    outDailyValues             = false;                        // 119
-    outDailyInterception       = false;                        // 120
-    outStationDischargeDaily   = false;                        // 121
-    outStationVelocityDaily    = false;                        // 122
-    outLocLakeStorageDaily     = false;                        // 123
-    outGloLakeStorageDaily     = false;                        // 124
-    outLocWetlStorageDaily     = false;                        // 125
-    outGloWetlStorageDaily     = false;                        // 126
-    outResStorageDaily         = false;                        // 127 x
+    outDailyValues             = false;                        // 129
+    outDailyInterception       = false;                        // 130
+    outStationDischargeDaily   = false;                        // 131
+    outStationVelocityDaily    = false;                        // 132
+    outLocLakeStorageDaily     = false;                        // 133
+    outGloLakeStorageDaily     = false;                        // 134
+    outLocWetlStorageDaily     = false;                        // 135
+    outGloWetlStorageDaily     = false;                        // 136
+    outResStorageDaily         = false;                        // 137 x
 
     scoutTemp                   = false;                        //sc0
     scoutExtRad                 = false;                        //sc1
@@ -962,16 +925,23 @@ void optionClass::init(int option_c,  char* option_v[])
     scoutFswb                   = false;                        //sc47
     scoutLandAreaFrac           = false;                        //sc48
 
-    ifstream outOptionsFile (filename_out_opt);
+    // water temperature calculation
+    outWaterTempDaily           = false;                        //138
+    outWaterTempMonthly         = false;                        //139
+    outWaterTempDailyAllSWB     = false;                        //140
+    outWaterTempMonthlyAllSWB   = false;                        //141
+
+    ifstream outOptionsFile(configFile.outputoptionsfile.c_str());
 	if (outOptionsFile) {
 		cout << "Reading " << filename_out_opt <<": ";
-                char templine[150];
-                bool setting[150];
-                short set_no = 0;
+        char templine[150];
+        bool setting[150];
+        short set_no = 0;
 		short notset_no = 0;
+
 		// read file
 		// ignore lines that do not start with '1' or '0'
-                while (outOptionsFile.getline(templine, 150)) {
+        while (outOptionsFile.getline(templine, 150)) {
 			if (templine[0] == '0') {
 				setting[notset_no + set_no] = false;
 				notset_no ++;
@@ -981,8 +951,9 @@ void optionClass::init(int option_c,  char* option_v[])
 				set_no ++;
 			}
 		}
-        if (set_no + notset_no != 128) {
+        if (set_no + notset_no != 142) {
 			cerr << "Unexpected number of settings in file '" << filename_out_opt << "'!" << endl;
+			cout << set_no + notset_no << endl;
 			exit (1);
 		}
 
@@ -1000,7 +971,6 @@ void optionClass::init(int option_c,  char* option_v[])
 		outGWRunoff 				= setting[9];
 		outGWRecharge 				= setting[10];
 		outSingleStorages 			= setting[11];
-		//outGWStorage 				= setting[12];
 		outMinMaxRiverAvail			= setting[12];
 		outSoilWater 				= setting[13];
         outLAI			 			= setting[14];
@@ -1017,7 +987,7 @@ void optionClass::init(int option_c,  char* option_v[])
 		outPET  					= setting[25];
 		outTotalPET 				= setting[26];
 		outRiverAvail 				= setting[27];
-		outRiverInUpstream			= setting[28];  //
+		outRiverInUpstream			= setting[28];
 		outRiverVelo 				= setting[29];
 		outSnowCover 				= setting[30];
 		outSWE		 	    		= setting[31];
@@ -1030,9 +1000,9 @@ void optionClass::init(int option_c,  char* option_v[])
         outGloLakeStorage    		= setting[38];
         outGloWetlStorage    		= setting[39];
         outResStorage        		= setting[40];
-		outRiverStorage      		= setting[41];  //
-		outTotalWaterInStorages_km3 = setting[42];  //
-		outTotalWaterInStorages_mm  = setting[43];  //
+		outRiverStorage      		= setting[41];
+		outTotalWaterInStorages_km3 = setting[42];
+		outTotalWaterInStorages_mm  = setting[43];
 		outActualNAS 				= setting[44];
 		outActualNAG 				= setting[45];
         outWCa                      = setting[46];
@@ -1051,214 +1021,236 @@ void optionClass::init(int option_c,  char* option_v[])
         outLocWetlExt               = setting[59];
         outGloWetlExt               = setting[60];
         outTotalGWR                 = setting[61];
+        outGwrunSurfrun             = setting[62];
+        outGlacArea                 = setting[63];
+        outGlacAreaFrac             = setting[64];
+        outGlacPrecip               = setting[65];
+        outGlacRunoff               = setting[66];
+        outGlacierStorage           = setting[67];
 		// daily binary files
-        outPrecDaily				= setting[62];
-        outCellAETDaily 			= setting[63];
-        outCellRunoffDaily 			= setting[64];
-        outCellSurfaceDaily			= setting[65];
-        outSurfaceRunoffDaily 		= setting[66];
-        outGWRunoffDaily 			= setting[67];
-        outGWRechargeDaily 			= setting[68];
-        outGWStorageDaily 			= setting[69];
-        outSoilWaterDaily 			= setting[70];
-        outLAIDaily		 			= setting[71];
-        outAlbedoDaily				= setting[72];
-        outInterceptionDaily 		= setting[73];
-        outCanopyWaterDaily			= setting[74];
-        outmaxCanopyWaterDaily		= setting[75];
-        outExtRadiationDaily 		= setting[76];
-        outShortDownRadiationDaily 	= setting[77];
-        outShortUpRadiationDaily 	= setting[78];
-        outNetShortWaveRadiationDaily = setting[79];
-        outLongDownRadiationDaily 	= setting[80];
-        outLongUpRadiationDaily 	= setting[81];
-        outNetLongWaveRadiationDaily= setting[82];
-        outNetRadiationDaily 		= setting[83];
-        outPETDaily 				= setting[84];
-        outTotalPETDaily 			= setting[85];
-        outRiverAvailDaily 			= setting[86];
-        outRiverVeloDaily			= setting[87];
-        outSnowCoverDaily 			= setting[88];
-        outSWEDaily 				= setting[89];
-        outSnowFallDaily 			= setting[90];
-        outSnowMeltDaily 			= setting[91];
-        outSurfStorDaily 			= setting[92];
-        outSingleStoragesDaily 		= setting[93];
-        outTotalWaterInStoragesDaily_km3 = setting[94];
-        outTotalWaterInStoragesDaily_mm = setting[95];
-        outTotalWaterInStoragesStartEndDaily_km3 = setting[96];
-        outGwrSwbDaily	            = setting[97];
-        outFswbDaily		        = setting[98];
-        outLandAreaFracDaily        = setting[99];
-        outGwrunSurfrunDaily        = setting[100];
-        outCellAETWCaDaily          = setting[101];
+        outPrecDaily				= setting[68];
+        outCellAETDaily 			= setting[69];
+        outCellRunoffDaily 			= setting[70];
+        outCellSurfaceDaily			= setting[71];
+        outSurfaceRunoffDaily 		= setting[72];
+        outGWRunoffDaily 			= setting[73];
+        outGWRechargeDaily 			= setting[74];
+        outGWStorageDaily 			= setting[75];
+        outSoilWaterDaily 			= setting[76];
+        outLAIDaily		 			= setting[77];
+        outAlbedoDaily				= setting[78];
+        outInterceptionDaily 		= setting[79];
+        outCanopyWaterDaily			= setting[80];
+        outmaxCanopyWaterDaily		= setting[81];
+        outExtRadiationDaily 		= setting[82];
+        outShortDownRadiationDaily 	= setting[83];
+        outShortUpRadiationDaily 	= setting[84];
+        outNetShortWaveRadiationDaily = setting[85];
+        outLongDownRadiationDaily 	= setting[86];
+        outLongUpRadiationDaily 	= setting[87];
+        outNetLongWaveRadiationDaily= setting[88];
+        outNetRadiationDaily 		= setting[89];
+        outPETDaily 				= setting[90];
+        outTotalPETDaily 			= setting[91];
+        outRiverAvailDaily 			= setting[92];
+        outRiverVeloDaily			= setting[93];
+        outSnowCoverDaily 			= setting[94];
+        outSWEDaily 				= setting[95];
+        outSnowFallDaily 			= setting[96];
+        outSnowMeltDaily 			= setting[97];
+        outSurfStorDaily 			= setting[98];
+        outSingleStoragesDaily 		= setting[99];
+        outTotalWaterInStoragesDaily_km3 = setting[100];
+        outTotalWaterInStoragesDaily_mm = setting[101];
+        outTotalWaterInStoragesStartEndDaily_km3 = setting[102];
+        outGwrSwbDaily	            = setting[103];
+        outFswbDaily		        = setting[104];
+        outLandAreaFracDaily        = setting[105];
+        outGwrunSurfrunDaily        = setting[106];
+        outCellAETWCaDaily          = setting[107];
+        outGlacierStorageDaily		= setting[108];
+        outGlacierStorageDaily_mm   = setting[109];
+        outRedTemp                  = setting[110];
+        outTemp                     = setting[111];
 
                 // additional binary files
-        outGWFactor 				= setting[102];
-        outRGmax 					= setting[103];
-        outmaxSoilWater				= setting[104];
-        outRootingDepth				= setting[105];
-        outClcl						= setting[106];
-        outLAImax					= setting[107];
-        outAirFrost					= setting[108];
-        outSurfaceFrost				= setting[109];
-        outRH						= setting[110];
+        outGWFactor 				= setting[112];
+        outRGmax 					= setting[113];
+        outmaxSoilWater				= setting[114];
+        outRootingDepth				= setting[115];
+        outClcl						= setting[116];
+        outLAImax					= setting[117];
+        outAirFrost					= setting[118];
+        outSurfaceFrost				= setting[119];
+        outRH						= setting[120];
 
         // ASCII files
-        outAllUpStations 			= setting[111];
-        outDirectUpStations 		= setting[112];
-        outRainDays 				= setting[113];
-        outStationDischargeAnnual 	= setting[114];
-        outStationDischargeMonthly 	= setting[115];
-        outStationList 				= setting[116]; //not yet implemented!!!
-        outSuperbasinClimate 		= setting[117]; // Superbasin calculation currently obsolete, probably not working correctly in WaterGAP2.2b, do in postprocessing  // FP 2015-10
-        outResvoirMonthly           = setting[118];  //
+        outAllUpStations 			= setting[121];
+        outDirectUpStations 		= setting[122];
+        outRainDays 				= setting[123];
+        outStationDischargeAnnual 	= setting[124];
+        outStationDischargeMonthly 	= setting[125];
+        outStationList 				= setting[126]; //not yet implemented!!!
+        outSuperbasinClimate 		= setting[127]; // Superbasin calculation currently obsolete, probably not working correctly in WaterGAP2.2b, do in postprocessing  // FP 2015-10
+        outResvoirMonthly           = setting[128];  //
         // additional ASCII files (option: save daily values)
-        outDailyValues 				= setting[119];
-        outDailyInterception 		= setting[120];
-        outStationDischargeDaily 	= setting[121];
-        outStationVelocityDaily 	= setting[122];
-        outLocLakeStorageDaily		= setting[123];
-        outGloLakeStorageDaily		= setting[124];
-        outLocWetlStorageDaily		= setting[125];
-        outGloWetlStorageDaily		= setting[126];
-        outResStorageDaily          = setting[127];  //
+        outDailyValues 				= setting[129];
+        outDailyInterception 		= setting[130];
+        outStationDischargeDaily 	= setting[131];
+        outStationVelocityDaily 	= setting[132];
+        outLocLakeStorageDaily		= setting[133];
+        outGloLakeStorageDaily		= setting[134];
+        outLocWetlStorageDaily		= setting[135];
+        outGloWetlStorageDaily		= setting[136];
+        outResStorageDaily          = setting[137];  //
+
+        // water temperature calculation
+        outWaterTempDaily           = setting[138];
+        outWaterTempMonthly         = setting[139];
+        outWaterTempDailyAllSWB     = setting[140];
+        outWaterTempMonthlyAllSWB   = setting[141];
 
 		cout << set_no << " files selected." <<endl;
 	}
 	else {
-		printf("File '%s' not found! No output will be written!\n", filename_out_opt);
+		printf("File '%s' not found! No output will be written!\n", filename_out_opt.c_str());
 	}
 	outOptionsFile.close();
+/*
+	// do the same for SINGLECELL_OUTPUT_OPTIONS
+	ifstream outscOptionsFile (filename_scout_opt.c_str());
+	if (outscOptionsFile) {
+		cout << "Reading " << filename_scout_opt <<": ";
+		char templine[120];
+		bool scsetting[100];
+		short set_no = 0;
+		short notset_no = 0;
+		// read file
+		// ignore lines that do not start with '1' or '0'
+		while (outscOptionsFile.getline(templine, 120)) {
+			if (templine[0] == '0') {
+					scsetting[notset_no + set_no] = false;
+					notset_no ++;
+			}
+			if (templine[0] == '1') {
+					scsetting[notset_no + set_no] = true;
+					set_no ++;
+			}
+		}
+		if (set_no + notset_no != 49) {
+			cerr << "Unexpected number of settings in file '" << filename_scout_opt << "'!" << endl;
+			exit (1);
+		}
 
-        // do the same for SINGLECELL_OUTPUT_OPTIONS
-        ifstream outscOptionsFile (filename_scout_opt);
-        if (outscOptionsFile) {
-                cout << "Reading " << filename_scout_opt <<": ";
-                char templine[120];
-                bool scsetting[100];
-                short set_no = 0;
-                short notset_no = 0;
-                // read file
-                // ignore lines that do not start with '1' or '0'
-                while (outscOptionsFile.getline(templine, 120)) {
-                        if (templine[0] == '0') {
-                                scsetting[notset_no + set_no] = false;
-                                notset_no ++;
-                        }
-                        if (templine[0] == '1') {
-                                scsetting[notset_no + set_no] = true;
-                                set_no ++;
-                        }
-                }
-        if (set_no + notset_no != 49) {
-                        cerr << "Unexpected number of settings in file '" << filename_scout_opt << "'!" << endl;
-                        exit (1);
-                }
+		if (day_store < 2) {
+			// set all scout options to 0 to avoid unnecessary initialization.
+			for (int i = 0; i < (set_no + notset_no); i++) {
+				scsetting[i] = 0;
+			}
+		}
+		else {
+			// settings for output files
+			// monthly/yearly binary files
+			scoutTemp                   = scsetting[0];
+			scoutExtRad                 = scsetting[1];
+			scoutShortDownRad           = scsetting[2];
+			scoutAlbedo                 = scsetting[3];
+			scoutShortUpRad             = scsetting[4];
+			scoutNetShortRad            = scsetting[5];
+			scoutLongDownRad            = scsetting[6];
+			scoutNetLongRad             = scsetting[7];
+			scoutLongUpRad              = scsetting[8];
+			scoutNetRad                 = scsetting[9];
+			scoutLAI                    = scsetting[10];
+			scoutKc                     = scsetting[11];
+			scoutLandPET                = scsetting[12];
+			scoutCellPET                = scsetting[13];
+			scoutPrecip                 = scsetting[14];
+			scoutcPrecip                = scsetting[15];
+			scoutCanopyWater            = scsetting[16];
+			scoutmaxCanopyWater         = scsetting[17];
+			scoutInterception           = scsetting[18];
+			scoutSnowfall               = scsetting[19];
+			scoutSnowWater              = scsetting[20];
+			scoutSnowCov                = scsetting[21];
+			scoutSnowmelt               = scsetting[22];
+			scoutSoilWater              = scsetting[23];
+			scoutSurfaceRunoff          = scsetting[24];
+			scoutGwRunoff               = scsetting[25];
+			scoutGwRecharge             = scsetting[26];
+			scoutCellAET                = scsetting[27];
+			scoutCellRunoffkm3          = scsetting[28];
+			scoutCellRunoffmm           = scsetting[29];
+			scoutCellSRunoff            = scsetting[30];
+			scoutQ                      = scsetting[31];
+			scoutFlowVelo               = scsetting[32];
+			scoutLocLake                = scsetting[33];
+			scoutLocWet                 = scsetting[34];
+			scoutGloLake                = scsetting[35];
+			scoutReservoir              = scsetting[36];
+			scoutGloWet                 = scsetting[37];
+			scoutRiver                  = scsetting[38];
+			scoutSurfaceStor            = scsetting[39];
+			scoutTWSkm3                 = scsetting[40];
+			scoutTWSmm                  = scsetting[41];
+			scoutGwStor                 = scsetting[42];
+			scoutCanopyStor             = scsetting[43];
+			scoutSnowStor               = scsetting[44];
+			scoutSoilStor               = scsetting[45];
+			scoutGwrSwb                 = scsetting[46];
+			scoutFswb                   = scsetting[47];
+			scoutLandAreaFrac           = scsetting[48];
 
-        if (day_store < 2) {// set all scout options to 0 to avoid unnecessary initialization.
-            for (int i = 0; i < (set_no + notset_no); i++) {
-                scsetting[i] = 0;
-            }
-        }
-        else {
-                // settings for output files
-                // monthly/yearly binary files
-                scoutTemp                   = scsetting[0];
-                scoutExtRad                 = scsetting[1];
-                scoutShortDownRad                = scsetting[2];
-                scoutAlbedo                 = scsetting[3];
-                scoutShortUpRad                = scsetting[4];
-                scoutNetShortRad            = scsetting[5];
-                scoutLongDownRad              = scsetting[6];
-                scoutNetLongRad             = scsetting[7];
-                scoutLongUpRad             = scsetting[8];
-                scoutNetRad                 = scsetting[9];
-                scoutLAI                    = scsetting[10];
-                scoutKc                     = scsetting[11];
-                scoutLandPET                = scsetting[12];
-                scoutCellPET                = scsetting[13];
-                scoutPrecip                 = scsetting[14];
-                scoutcPrecip                = scsetting[15];
-                scoutCanopyWater            = scsetting[16];
-                scoutmaxCanopyWater         = scsetting[17];
-                scoutInterception           = scsetting[18];
-                scoutSnowfall               = scsetting[19];
-                scoutSnowWater              = scsetting[20];
-                scoutSnowCov                = scsetting[21];
-                scoutSnowmelt               = scsetting[22];
-                scoutSoilWater              = scsetting[23];
-                scoutSurfaceRunoff          = scsetting[24];
-                scoutGwRunoff               = scsetting[25];
-                scoutGwRecharge             = scsetting[26];
-                scoutCellAET                = scsetting[27];
-                scoutCellRunoffkm3          = scsetting[28];
-                scoutCellRunoffmm           = scsetting[29];
-                scoutCellSRunoff            = scsetting[30];
-                scoutQ                      = scsetting[31];
-                scoutFlowVelo               = scsetting[32];
-                scoutLocLake                = scsetting[33];
-                scoutLocWet                 = scsetting[34];
-                scoutGloLake                = scsetting[35];
-                scoutReservoir              = scsetting[36];
-                scoutGloWet                 = scsetting[37];
-                scoutRiver                  = scsetting[38];
-                scoutSurfaceStor            = scsetting[39];
-                scoutTWSkm3                 = scsetting[40];
-                scoutTWSmm                  = scsetting[41];
-                scoutGwStor                 = scsetting[42];
-                scoutCanopyStor             = scsetting[43];
-                scoutSnowStor               = scsetting[44];
-                scoutSoilStor               = scsetting[45];
-                scoutGwrSwb                 = scsetting[46];
-                scoutFswb                   = scsetting[47];
-                scoutLandAreaFrac           = scsetting[48];
-
-                if (2 == day_store)
-                    cout << set_no << " variables for SINGLECELLOUT selected." <<endl;
-                else
-                    cout << "no SINGLECELLOUT selected." << endl;
-        }
-        }
-        else {
-                printf("File '%s' not found! No output will be written!\n", filename_scout_opt);
-        }
-        outscOptionsFile.close();
+			if (2 == day_store)
+				cout << set_no << " variables for SINGLECELLOUT selected." <<endl;
+			else
+				cout << "no SINGLECELLOUT selected." << endl;
+		}
+	}
+	else {
+			printf("File '%s' not found! No output will be written!\n", filename_scout_opt.c_str());
+	}
+	outscOptionsFile.close();
+ */
 }
-   // MODEL_SETTINGS output start
-void optionClass::createModelSettingsFile(const char *outputDir)
+
+// MODEL_SETTINGS output start
+void optionClass::createModelSettingsFile(const string outputDir)
 {
+  	char filename[250];
 
-  char filename[250];
-
-	sprintf(filename, "%s/MODEL_SETTINGS.OUT", outputDir);
+	sprintf(filename, "%s/MODEL_SETTINGS.OUT", outputDir.c_str());
 	ofstream output_file(filename);
 
 	if (!output_file) {
 		cerr << "Can not open file " << filename << " for writing" << endl;
 		exit(-1);
 	}
-        output_file << "# Model time: " << getTimeString() << filename << endl;
+
+    output_file << "# Model time: " << getTimeString() << filename << endl;
+    output_file << "------------------------------------------------\n";
+    output_file << "Commithash: " << GIT_COMMIT_HASH << endl;
 	output_file << "------------------------------------------------\n";
 
-        output_file << "Values from file " << filename_data << endl;
+    output_file << "Values from file " << filename_data << endl;
 	output_file << "Input data directory: " << input_dir << endl;
-  output_file << "Output data directory: " << output_dir << endl;
+  	output_file << "Output data directory: " << output_dir << endl;
 	output_file << "Climate data directory: " << climate_dir << endl;
 	output_file << "Routing data directory: " << routing_dir << endl;
 	output_file << "Water use data directory: " << water_use_dir << endl;
-        output_file << "Land cover data directory: " << land_cover_dir << endl;
+	output_file << "Glacier data directory: " << glacier_dir << endl;
+    output_file << "Land cover data directory: " << land_cover_dir << endl;
 	output_file << "------------------------------------------------\n";
 
-        output_file << "Values from file " << filename_time << endl;
+    output_file << "Values from file " << filename_time << endl;
 	output_file << "Start year of calculations: " << start_year << endl;
 	output_file << "End year of simulation: " << end_year << endl;
 	output_file << "Start year of evaluation: " << evalStartYear << endl;
 	output_file << "Number of initialisation years: " << init_years << endl;
-        output_file << "Time step: " << time_step << endl;
+    output_file << "Time step: " << time_step << endl;
 	output_file << "------------------------------------------------\n";
 
-        output_file << "Values from file " << filename_opt << endl;
+    output_file << "Values from file " << filename_opt << endl;
 	output_file << "1. Indicator for endian type of binary input files    : " << fileEndianType << endl;
   output_file << "2. Indicator for waterbasins to be simulated    : " << basin << endl;
   output_file << "3. Indicator for storage of grid files    : " << grid_store << endl;
@@ -1266,36 +1258,34 @@ void optionClass::createModelSettingsFile(const char *outputDir)
   output_file << "5. Indicator for storage of additional daily values    : " << day_store << endl;
   output_file << "6. Indicator for calculation of time series    : " << time_series << endl;
   output_file << "7. Indicator for the use of radiation input type    : " << cloud << endl;
-  output_file << "8. Calculation of daily precipitation     : " << raindays << endl;
-  output_file << "9. Indicator for correction of precipitation values    : " << prec_correct << endl;
-  output_file << "10. Indicator for interception    : " << intercept << endl;
-  output_file << "11. Calculate variation in albedo    : " << calc_albedo << endl;
-  output_file << "12. Equation for potential evapotranspiration (PET)    : " << petOpt << endl;
-  output_file << "13. Consider crop coefficients (Kc) for estimation of potential evapotransporation (PET)    : " << use_kc << endl;
-  output_file << "14. Calculations with variable land cover    : " << landCoverOpt << endl;
-  output_file << "15. Preparation of routing files    : " << rout_prepare << endl;
-  output_file << "16. Check routing time step    : " << timeStepCheckFlag << endl;
-  output_file << "17. Calculate variable flow velocity    : " << riverveloOpt << endl;
-  output_file << "18. Indicator for subtraction of water use from river and lake storages    : " << subtract_use << endl;
-  output_file << "19. Indicator for allocation of water use    : " << use_alloc << endl;
-  output_file << "20. Allow delayed satisfaction of water use from surface water    : " << delayedUseSatisfaction << endl;
-  output_file << "21. Calculate arid/humid areas    : " << clclOpt << endl;
-  output_file << "22. Calculate areal extend of permafrost    : " << permaOpt << endl;
-  output_file << "23. New reservoir algorithm    : " << resOpt << endl;
-  output_file << "24. Station correction status    : " << statcorrOpt << endl;
-  output_file << "25. Additional groundwater recharge below surface water bodies in arid / semi-arid regions    : " << aridareaOpt << endl;
-  output_file << "26. Modified routing of groundwater outflow and fast runoff    : " << fractionalRoutingOpt << endl;
-  output_file << "27. Allow evaporation from rivers    : " << riverEvapoOpt << endl;
-  output_file << "28. Take into account NUS of riparian cells    : " << aggrNUsGloLakResOpt << endl;
-  output_file << "29. Correction of G_gammaHBV in the North China Plain    : " << gammaHBV_CorrOpt << endl;
+  output_file << "8. Indicator for interception    : " << intercept << endl;
+  output_file << "9. Calculate variation in albedo    : " << calc_albedo << endl;
+  output_file << "10. Equation for potential evapotranspiration (PET)    : " << petOpt << endl;
+  output_file << "11. Consider crop coefficients (Kc) for estimation of potential evapotransporation (PET)    : " << use_kc << endl;
+  output_file << "12. Calculations with variable land cover    : " << landCoverOpt << endl;
+  output_file << "13. Preparation of routing files    : " << rout_prepare << endl;
+  output_file << "14. Check routing time step    : " << timeStepCheckFlag << endl;
+  output_file << "15. Calculate variable flow velocity    : " << riverveloOpt << endl;
+  output_file << "16. Indicator for subtraction of water use from river and lake storages    : " << subtract_use << endl;
+  output_file << "17. Indicator for allocation of water use    : " << use_alloc << endl;
+  output_file << "18. Allow delayed satisfaction of water use from surface water    : " << delayedUseSatisfaction << endl;
+  output_file << "19. Calculate arid/humid areas    : " << clclOpt << endl;
+  output_file << "20. Calculate areal extend of permafrost    : " << permaOpt << endl;
+  output_file << "21. New reservoir algorithm    : " << resOpt << endl;
+  output_file << "22. Station correction status    : " << statcorrOpt << endl;
+  output_file << "23. Additional groundwater recharge below surface water bodies in arid / semi-arid regions    : " << aridareaOpt << endl;
+  output_file << "24. Modified routing of groundwater outflow and fast runoff    : " << fractionalRoutingOpt << endl;
+  output_file << "25. Allow evaporation from rivers    : " << riverEvapoOpt << endl;
+  output_file << "26. Take into account NUS of riparian cells    : " << aggrNUsGloLakResOpt << endl;
   // FP20161018N003 Enable reading input data from climate land mask
-  output_file << "30. Climate land mask status    : " << climate_spatial_resolution << endl;
+  output_file << "27. Climate land mask status    : " << climate_spatial_resolution << endl;
   // FP20161018N002 Reservoir operation start years
-  output_file << "31. Reservoir operation start year status    : " << resYearOpt << endl;
-  output_file << "32. Reservoir operation reference year: " << resYearReference << endl;
-  output_file << "33. Reservoir operation first year to use: " << resYearFirstToUse << endl;
-  output_file << "34. Reservoir operation last year to use: " << resYearLastToUse << endl;
-  output_file << "35. Anthropogenic / naturalized status    : " << antNatOpt << endl;
+  output_file << "28. Reservoir operation start year status    : " << resYearOpt << endl;
+  output_file << "29. Reservoir operation reference year: " << resYearReference << endl;
+  output_file << "30. Reservoir operation first year to use: " << resYearFirstToUse << endl;
+  output_file << "31. Reservoir operation last year to use: " << resYearLastToUse << endl;
+  output_file << "32. Anthropogenic / naturalized status    : " << antNatOpt << endl;
+  output_file << "36. Take glaciers into account    : " << glacierOpt << endl;
   output_file << "------------------------------------------------\n";
 
   output_file << "Values from file " << filename_out_opt << endl;
@@ -1361,6 +1351,12 @@ void optionClass::createModelSettingsFile(const char *outputDir)
   output_file << "G_LOC_WETL_EXTENT_km2_[YEAR].12.UNF0   : " << outLocWetlExt    << endl;
   output_file << "G_GLO_WETL_EXTENT_km2_[YEAR].12.UNF0   : " << outGloWetlExt    << endl;
   output_file << "G_TOTAL_GW_RECHARGE_[YEAR].12.UNF0   : " << outTotalGWR    << endl;
+  output_file << "G_GWRUN_SURFRUN_km3_[YEAR].12.UNF0	: " << outGwrunSurfrun << endl;
+  output_file << "G_GLACIER_AREA_km2_[YEAR].12.UNF0    : " << outGlacArea    << endl;
+  output_file << "G_GLACIER_AREA_FRACTION_[YEAR].12.UNF0   : " << outGlacAreaFrac << endl;
+  output_file << "G_PRECIPITATION_ON_GLACIER_[YEAR].12.UNF0 : " << outGlacPrecip << endl;
+  output_file << "G_GLACIER_RUNOFF_[YEAR].12.UNF0      : " << outGlacRunoff << endl;
+  output_file << "G_GLACIER_STORAGE_[YEAR].12.UNF0     : " << outGlacierStorage << endl;
   output_file << "daily binary files "<< endl;
   output_file << "G_PRECIPITATION_[YEAR]*.UNF0   : " << outPrecDaily<< endl;
   output_file << "G_CELL_AET_[YEAR]*.UNF0   : " << outCellAETDaily << endl;
@@ -1402,6 +1398,10 @@ void optionClass::createModelSettingsFile(const char *outputDir)
   output_file << "G_LAND_AREA_FRACTION_[YEAR]*.UNF0	: " << outLandAreaFracDaily << endl;
   output_file << "G_GWRUN_SURFRUN_[YEAR]*.UNF0	: " << outGwrunSurfrunDaily << endl;
   output_file << "G_CELLAET_CONSUSE_[YEAR]*.UNF0	: " << outCellAETWCaDaily << endl;
+  output_file << "G_REDUCED_TEMPERATURE_[YEAR]*.UNF0   : " << outRedTemp<< endl;
+  output_file << "G_TEMPERATURE_[YEAR]*.UNF0    : " << outTemp<< endl;
+  output_file << "G_GLACIER_STORAGE_km3_[YEAR]*.UNF0    : " << outGlacierStorageDaily << endl;
+  output_file << "G_GLACIER_STORAGE_mm_[YEAR]*.UNF0    : " << outGlacierStorageDaily_mm << endl;
   output_file << "additional binary files "<< endl;
   output_file << "G_GW_FACTOR.UNF0   : " << outGWFactor << endl;
   output_file << "G_RG_max.UNF2   : " << outRGmax << endl;
@@ -1439,17 +1439,14 @@ void optionClass::closeModelSettingsFile()
 {
 	modelSettingsFile.close();
 }
-    // HMS MODEL_SETTINGS output end
 
-   // HMS 2013-11-21 SINGLECELL output start
-short optionClass::createSingleCellFileList(const char *inputDir, const char *outputDir)
+short optionClass::createSingleCellFileList(const std::string inputDir, const std::string outputDir)
 {
-  extern short G_toBeCalculated[ng];
-  extern short G_SingleCelltoBeCalculated[ng];
-  extern geoClass geo;
-  extern routingClass routing;
-  extern landClass land;
-  char filename[250];
+//    extern Grid<short> G_toBeCalculated;
+//    extern Grid<short> G_SingleCelltoBeCalculated;
+//    extern geoClass geo;
+//    extern routingClass routing;
+//    extern landClass land;
 
 	// open file which contains IMAGE-nrs of single cells
 	ifstream singlecells_file(filename_singlecells);
@@ -1458,36 +1455,38 @@ short optionClass::createSingleCellFileList(const char *inputDir, const char *ou
 		cerr << "Can not open file " << filename_singlecells << endl;
 		exit(-1);
 	}
+
 	// open file for output
-	sprintf(filename, "%s/SINGLECELL_LIST.OUT", outputDir);
-	ofstream output_file(filename);
+	ofstream output_file(outputDir + "/SINGLECELL_LIST.OUT");
 
 	if (!output_file) {
-		cerr << "Can not open file " << filename << " for writing" << endl;
+		cerr << "Can not open file " << outputDir << "/SINGLECELL_LIST.OUT" << " for writing" << endl;
 		exit(-1);
 	}
-	output_file << "# " << getTimeString() << filename << endl;
+	output_file << "# " << getTimeString() << outputDir << "/SINGLECELL_LIST.OUT" << endl;
 	output_file << "------------------------------------------------\n";
-  short cellAlreadyInList;
-  float longitude, latitude;
-  char string[250];
+
+  	short cellAlreadyInList;
+  	float longitude, latitude;
+  	char string[250];
 	short singlecellnr = 0;
 	const short maxLength = 25;
-  short length;
+  	short length;
 	int k;
 
 
 	extStack < int >stackSingleCellNum;
 	int scn, scn2;
-  Stack < char *>stackNamePointer;
+  	Stack < char *> stackNamePointer;
 	char *SingleCellName;
 
-
-	do {	singlecells_file >> string;
-    if (singlecells_file) {
+	do {
+		singlecells_file >> string;
+    	if (singlecells_file) {
 			singlecells_file >> longitude >> latitude;
 
-    length = strlen(string);
+    		length = strlen(string);
+
 			if (length >= maxLength) {
 				SingleCellName = new char[maxLength + 1];
 
@@ -1527,68 +1526,56 @@ short optionClass::createSingleCellFileList(const char *inputDir, const char *ou
 				} else {
 					// everything OK, cell should be used
 
-          if (2 == basin){ // HMS 2011-11-21 to calculate this cells anyway.
-            G_toBeCalculated[scn-1] = 1;
-            G_SingleCelltoBeCalculated[scn-1] = 1;
-          }
-					output_file << "Cell area according to position of cell (GAREA.UNF0): " << geo.areaOfCellByArrayPos(scn) << endl;
-          output_file << "Land fraction according to GFREQ: " << (float)geo.G_landfreq_const[scn-1] << endl; // FP20161018N002
-          output_file << "Water fraction according to GFREQW: " << (float)geo.G_fwaterfreq_const[scn-1] << endl; // FP20161018N002
-            for (int n = 0; n < ng; ++n) {
-              if (n == scn - 1) {
-                output_file << "Fraction of global wetlands according to G_GLOWET: " << (float)routing.G_glo_wetland[n] << endl;
-                output_file << "Fraction of local wetlands according to G_LOCWET: " << (float)routing.G_loc_wetland[n] << endl;
-                output_file << "Fraction of global lakes according to G_GLOLAK: " << routing.G_glo_lake[n] << endl;
-                output_file << "Fraction of lokal lakes according to G_LOCLAK: " << routing.G_loc_lake[n] << endl;
-                output_file << "Area of lakes according to G_LAKAREA: " << routing.G_lake_area[n] << endl;
-                output_file << "Area of reservoirs and regulated lakes according to G_RESAREA: " << routing.G_reservoir_area[n] << endl;
-                output_file << "Land cover type: " << (float)land.G_landCover[n] << endl;
-               }
-            }
+          			if (2 == basin)	{
+						// to calculate this cells anyway.
+						G_toBeCalculated[scn-1] = 1;
+						G_SingleCelltoBeCalculated[scn-1] = 1;
+          			}
 
-          stackSingleCellNum.push(scn);
+					output_file << "Cell area according to position of cell (GAREA.UNF0): " << geo.areaOfCellByArrayPos(scn) << endl;
+
+					for (int n = 0; n < ng; ++n) {
+						if (n == scn - 1) {
+							output_file << "Fraction of global wetlands according to G_GLOWET: " << (float)routing.G_glo_wetland[n] << endl;
+							output_file << "Fraction of local wetlands according to G_LOCWET: " << (float)routing.G_loc_wetland[n] << endl;
+							output_file << "Fraction of global lakes according to G_GLOLAK: " << routing.G_glo_lake[n] << endl;
+							output_file << "Fraction of lokal lakes according to G_LOCLAK: " << routing.G_loc_lake[n] << endl;
+							output_file << "Area of lakes according to G_LAKAREA: " << routing.G_lake_area[n] << endl;
+							output_file << "Area of reservoirs and regulated lakes according to G_RESAREA: " << routing.G_reservoir_area[n] << endl;
+							output_file << "Land cover type: " << (float)land.G_landCover[n] << endl;
+						}
+					}
+
+          			stackSingleCellNum.push(scn);
 					stackNamePointer.push(SingleCellName);
-			    singlecellnr++;
-			output_file << "Single Cell Output Nr.: " << singlecellnr << endl;
-			output_file << "------------------------------------------------\n";
-	        }
-	     }
-      }
+			    	singlecellnr++;
+					output_file << "Single Cell Output Nr.: " << singlecellnr << endl;
+					output_file << "------------------------------------------------\n";
+	        	}
+	     	}
+      	}
     } while (singlecells_file);
+
 	singlecells_file.close();
 
-   cellname = new char *[stackNamePointer.getNumberOfElements()];
+   	cellname = new char *[stackNamePointer.getNumberOfElements()];
 
 	for (int i = stackNamePointer.getNumberOfElements(); i >= 1; i--)
 		if (stackNamePointer.pop(SingleCellName))
 			cellname[i - 1] = SingleCellName;
 
 	cellnr = new int[stackSingleCellNum.getNumberOfElements()];
+
 	for (int i = stackSingleCellNum.getNumberOfElements(); i >= 1; i--)
 		if (stackSingleCellNum.pop(scn))
 			cellnr[i - 1] = scn;
 
-		//	stackNamePointer.pop(SingleCellName);
-
 	numberOfSingleCells = singlecellnr;
-return numberOfSingleCells;
+	return numberOfSingleCells;
 }
 
 
 optionClass::~optionClass()
 {
-	delete[] filename_data; 	filename_data 		= NULL;
-	delete[] filename_time; 	filename_time 		= NULL;
-	delete[] filename_opt; 		filename_opt  		= NULL;
-	delete[] filename_out_opt; 	filename_out_opt	= NULL;
-	delete[] filename_stations; 	filename_stations	= NULL;
-	delete[] filename_singlecells; 	filename_singlecells	= NULL;
-        delete[] filename_scout_opt; 	filename_scout_opt	= NULL;
-
-	if (landCoverOpt) {
-		delete[] landCoverYears;      landCoverYears      = NULL;
-		delete[] landCoverYearsStart; landCoverYearsStart = NULL;
-		delete[] landCoverYearsEnd;   landCoverYearsEnd   = NULL;
-	}
 }
 

@@ -12,65 +12,58 @@
 * see former changes at file rout_prepare.cpp.versioninfos.txt
 *
 ***********************************************************************/
-#include <iostream>
+//#include <iostream>
 #include <cstdio>
 #include <cmath>
-#include "gridio.h"
 #include "timestring.h"
-
+#include "grid.h"
 #include "def.h"
+#include "common.h"
+#include "globals.h"
 
 using namespace std;
-
-extern gridioClass gridIO;
 
 #define nb_max 60000	// max. basin number for declaration of array
 #define nb2_max 10000	// maximum number of basins with more than one cell
 
 // #define debug
 
-void replace_flow_to_ocean(int GCRC_2[722][362], short *G_row, short *G_column, char *G_LDD);
+void replace_flow_to_ocean(const VariableChannelGrid<362,int,true,722> GCRC_2, const Grid<short> G_row, const Grid<short> G_column, Grid<char> & G_LDD);
 
-void inflow_cells(char *G_LDD,
-				  int GCRC_2[722][362],
-				  short *G_row, short *G_column, int G_inflow_cells[ng][9], char *output_dir);
+VariableChannelGrid<9,int> inflow_cells(const Grid<char> G_LDD, const VariableChannelGrid<362,int,true,722> GCRC_2,
+				  const Grid<short> G_row, const Grid<short> G_column, const string output_dir);
 
+Grid<short> flow_accumulation(const VariableChannelGrid<9,int> G_inflow_cells);
 
-void flow_accumulation(int G_inflow_cells[ng][9], short *G_flow_acc);
+unsigned short derive_basins(Grid<char>& G_LDD, const VariableChannelGrid<9,int> G_inflow_cells,
+							 Grid<unsigned short>& G_watersheds, const string output_dir);
 
-unsigned short derive_basins(char *G_LDD,
-							 int G_inflow_cells[ng][9],
-							 unsigned short *G_watersheds, char *output_dir);
+unsigned short reindex_waterbasins(const unsigned short nb, const Grid<short,true,nb_max> basin_cells, Grid<unsigned short>& G_watersheds);
 
-unsigned short reindex_waterbasins(unsigned short nb,
-								   short *basin_cells, unsigned short *G_watersheds);
+Grid<int> outflow_cell(const Grid<char> G_LDD, const VariableChannelGrid<362,int,true,722> GCRC_2,
+				  const Grid<short> G_row, const Grid<short> G_column, const string output_dir);
 
-void outflow_cell(char *G_LDD,
-				  int GCRC_2[722][362],
-				  short *G_row, short *G_column, int *G_outflow_cell, char *output_dir);
+VariableChannelGrid<8,int> neighbouring_cells(const VariableChannelGrid<362,int,true,722> GCRC_2, const Grid<short> G_row, const Grid<short> G_column, const string output_dir);
 
-void neighbouring_cells(int GCRC_2[722][362], short *G_row, short *G_column, int G_neighbourCell[ng][8], char *output_dir);
+VariableChannelGrid<360,float,true,9> calculate_distances(const string output_dir);
 
-void calculate_distances(float cell_distance[9][360], char *output_dir);
+void calculate_river_slope(const Grid<float> G_meandering_ratio, const VariableChannelGrid<360,float,true,9> cell_distance,
+                           const Grid<float> G_altitude, const Grid<int> G_outflow_cell,
+						   const Grid<char> G_LDD, const Grid<short> G_row, const string output_dir);
 
-void calculate_river_slope(float *G_meandering_ratio, float cell_distance[9][360], //LA (2014-02-12): meandering ratio added
-						   float *G_altitude,
-						   int *G_outflow_cell, char *G_LDD, short *G_row, char *output_dir);
+void calculate_river_length(const Grid<float> G_meandering_ratio, const Grid<short> G_row, const Grid<short> G_column,
+						const VariableChannelGrid<360,float,true,9> cell_distance, const Grid<int> G_outflow_cell, const string output_dir);
 
-void calculate_river_length(float *G_meandering_ratio, short *G_row, short *G_column, float cell_distance[9][360], 
-                            int *G_outflow_cell, char *output_dir);
+Grid<int> rout_order(const VariableChannelGrid<9,int> G_upstreamCells, const Grid<int> G_outflow_cell, const string output_dir);
 
-void rout_order(int *G_routOrder, int G_inflow_cells[ng][9], int *G_outflow_cell, char *output_dir);
+void reservoir_prepare(const Grid<int> G_outflow_cell, const Grid<short> G_row, const string input_dir, const string output_dir);
 
-void reservoir_prepare(int *G_outflow_cell, char *input_dir, char *output_dir, short *G_row);
-
-
-void prepare_routing_files(char *input_dir, char *output_dir, short arcNumbersForFlowDir, short resOpt)
+void prepare_routing_files(const std::string inputDirectory, const std::string outputDirectory, const short arcNumbersForFlowDir, const short resOpt)
 {
 	// read binary input files
 	char filename[250];
 
-	char G_LDD[ng];
+	Grid<char> G_LDD;
 
 	if (1 == arcNumbersForFlowDir) {
 		// if file with flow directon contains number 
@@ -78,14 +71,10 @@ void prepare_routing_files(char *input_dir, char *output_dir, short arcNumbersFo
 		// then convert them to the internal representation 
 		// of WaterGAP
 
-		// char *G_flowdir;
-		// G_flowdir = new char[ng];
-		short *G_flowdir;
-		G_flowdir = new short[ng];
+		Grid<short> G_flowdir;
 
-//		sprintf(filename, "%s/G_FLOWDIR.UNF1", input_dir);
-		sprintf(filename, "%s/G_FLOWDIR.UNF2", input_dir);
-		gridIO.readUnfFile(filename, ng, G_flowdir);
+		G_flowdir.read(inputDirectory + "/G_FLOWDIR.UNF2");
+
 		for (int n = 0; n < ng; ++n) {
 			switch (G_flowdir[n]) {
 			case -1:// inland sinks
@@ -124,70 +113,47 @@ void prepare_routing_files(char *input_dir, char *output_dir, short arcNumbersFo
 			}
 		}
 	} else {
-		sprintf(filename, "%s/G_LDD.UNF1", input_dir);
-		gridIO.readUnfFile(filename, ng, &G_LDD[0]);
+		G_LDD.read(inputDirectory + "/G_LDD.UNF1");
 	}
 
-	short G_row[ng], G_column[ng];
+	Grid<short> G_row;
+	G_row.read(inputDirectory + "/GR.UNF2");
 
-	sprintf(filename, "%s/GR.UNF2", input_dir);
-	gridIO.readUnfFile(filename, ng, &G_row[0]);
-	sprintf(filename, "%s/GC.UNF2", input_dir);
-	gridIO.readUnfFile(filename, ng, &G_column[0]);
+	Grid<short> G_column;
+	G_column.read(inputDirectory + "/GC.UNF2");
 	
-	int GCRC[720][360];
+	VariableChannelGrid<360,int,true,720> GCRC;
+	GCRC.read(inputDirectory + "/GCRC.UNF4");
 
-	sprintf(filename, "%s/GCRC.UNF4", input_dir);
-	gridIO.readUnfFile(filename, 360 * 720, &GCRC[0][0]);
+	Grid<float> G_contfreq;
+	G_contfreq.read(inputDirectory + "/GCONTFREQ.UNF0");
 
-	float G_freq[ng], G_w_freq[ng];
-
-	sprintf(filename, "%s/GFREQ.UNF0", input_dir);
-	gridIO.readUnfFile(filename, ng, &G_freq[0]);
-	sprintf(filename, "%s/GFREQW.UNF0", input_dir);
-	gridIO.readUnfFile(filename, ng, &G_w_freq[0]);
-	float area[360];
-
-	sprintf(filename, "%s/GAREA.UNF0", input_dir);
-	gridIO.readUnfFile(filename, 360, &area[0]);
+	Grid<float,true,360> area;
+	area.read(inputDirectory + "/GAREA.UNF0");
 
 	// copy array, and add a row/column at the borders of the map 
 	// so that easy access to the neighbouring cells is possible  
-	int GCRC_2[722][362];
+	VariableChannelGrid<362,int,true,722> GCRC_2;
 
 	for (short j = 0; j < 722; ++j) {
-		GCRC_2[j][0] = 0;
-		GCRC_2[j][361] = 0;
+		GCRC_2(j,0) = 0;
+		GCRC_2(j,361) = 0;
 	}
 	for (short i = 0; i <= 359; i++) {
-		GCRC_2[0][i + 1] = GCRC[719][i];
-		GCRC_2[721][i + 1] = GCRC[0][i];
+		GCRC_2(0,i + 1) = GCRC(719,i);
+		GCRC_2(721,i + 1) = GCRC(0,i);
 		for (short j = 0; j <= 719; j++)
-			GCRC_2[j + 1][i + 1] = GCRC[j][i];
+			GCRC_2(j + 1,i + 1) = GCRC(j,i);
 	}
 
-	// give value of 5 to those cells which contain ocean water 
-	//for (n=0; n<=(ng-1); n++)
-	//  if (G_freq[n] + G_w_freq[n] < 36) G_LDD[n] = 5;
+	G_LDD.write(outputDirectory + "/G_LDD_2.UNF1");
 
-	//replace_flow_to_ocean(GCRC_2, G_row, G_column, G_LDD);
-
-	sprintf(filename, "%s/G_LDD_2.UNF1", output_dir);
-	gridIO.writeUnfFile(filename, ng, &G_LDD[0]);
-
-	// cells from which flow into the cell of interest occurs 
-	int G_inflow_cells[ng][9];
-
+	// cells from which flow into the cell of interest occurs
 	// new information saved in G_inflow_cells
-	inflow_cells(G_LDD, GCRC_2, G_row, G_column, G_inflow_cells, output_dir);
+	VariableChannelGrid<9,int> G_inflow_cells = inflow_cells(G_LDD, GCRC_2, G_row, G_column, outputDirectory);
 
 	// number of upstream cells (plus the cell itself) 
-	short G_flow_acc[ng];
-
-	flow_accumulation(G_inflow_cells, G_flow_acc);
-
-	//sprintf(filename,"%s/G_FLOW_ACC_UNCORRECTED.UNF2",output_dir);
-	//gridIO.writeUnfFile(filename, ng, G_flow_acc);
+	Grid<short> G_flow_acc = flow_accumulation(G_inflow_cells);
 
 	// cells with G_flow_acc == 0 did not get an flow accumulation value.
 	// the reason for this is that they are part of a loop.
@@ -201,31 +167,28 @@ void prepare_routing_files(char *input_dir, char *output_dir, short arcNumbersFo
 			G_flow_acc[n] = 1;
 			correction = 1;
 		}
-	sprintf(filename, "%s/G_FLOW_ACC.UNF2", output_dir);
-	gridIO.writeUnfFile(filename, ng, G_flow_acc);
+	G_flow_acc.write(outputDirectory + "/G_FLOW_ACC.UNF2");
 
 	if (1 == correction) {
 		// Calculation of 'inflow cells' and 'flow accumulation' has to be 
 		// done again, if cells have been corrected
-		inflow_cells(G_LDD, GCRC_2, G_row, G_column, G_inflow_cells, output_dir);
-		flow_accumulation(G_inflow_cells, G_flow_acc);
+		G_inflow_cells = inflow_cells(G_LDD, GCRC_2, G_row, G_column, outputDirectory);
+		G_flow_acc = flow_accumulation(G_inflow_cells);
 	}
 
-
-	unsigned short G_watersheds[ng];
 	unsigned short nb;	// number of waterbasins 
 
-	nb = derive_basins(G_LDD, G_inflow_cells, G_watersheds, output_dir);
+	Grid<unsigned short> G_watersheds;
+
+	nb = derive_basins(G_LDD, G_inflow_cells, G_watersheds, outputDirectory);
 
 	// calculate number of cells per waterbasins  
-	short basin_cells[nb_max];
+	Grid<short, true,nb_max> basin_cells;
 
 	for (int i = 0; i < nb_max; ++i)
 		basin_cells[i] = 0;
 	for (int n = 0; n <ng; ++n)
 		basin_cells[G_watersheds[n]]++;
-	//for (i=0; i<=nb; i++)
-	// printf("%d %d\n",i,basin_cells[i]);
 
 	// give new number to watersheds:  
 	// only those are considered which 
@@ -234,9 +197,7 @@ void prepare_routing_files(char *input_dir, char *output_dir, short arcNumbersFo
 	// be performed.                   
 	nb = reindex_waterbasins(nb, basin_cells, G_watersheds);
 
-	sprintf(filename, "%s/G_BASINS_2.UNF2", output_dir);
-	gridIO.writeUnfFile(filename, ng, &G_watersheds[0]);
-
+	G_watersheds.write(outputDirectory + "/G_BASINS_2.UNF2");
 
 	cout << "Storing information about waterbasins ..." << endl;
 	float basin_area[nb2_max];
@@ -248,11 +209,10 @@ void prepare_routing_files(char *input_dir, char *output_dir, short arcNumbersFo
 		coordinates[n][0] = -999;
 	}
 	for (int n = 0; n < ng; ++n) {
-		basin_area[G_watersheds[n]] += area[G_row[n] - 1] * ((G_w_freq[n] + G_freq[n]) / 100.0);	// [km2] 
+		basin_area[G_watersheds[n]] += area[G_row[n] - 1] * (G_contfreq[n] / 100.0);	// [km2]
 		basin_cells[G_watersheds[n]]++;
 	}
 	for (int n = 0; n < ng; ++n) {
-//		if ((5 == G_LDD[n]) && (G_watersheds[n] >= 1))
 		if (( (5 == G_LDD[n]) || (-1 == G_LDD[n]) ) && (G_watersheds[n] >= 1)) 
 		{
 			if (coordinates[G_watersheds[n]][0] > -998)
@@ -264,7 +224,7 @@ void prepare_routing_files(char *input_dir, char *output_dir, short arcNumbersFo
 	}
 	FILE *file_ptr;
 
-	sprintf(filename, "%s/BASINS.OUT", output_dir);
+	sprintf(filename, "%s/BASINS.OUT", outputDirectory.c_str());
 	file_ptr = fopen(filename, "w");
 	fprintf(file_ptr, "# %s", getTimeString());
 	fprintf(file_ptr, "#\n");
@@ -285,49 +245,39 @@ void prepare_routing_files(char *input_dir, char *output_dir, short arcNumbersFo
 	// routing in watergap
 	// these routines are independed from those above
 
-	int G_outflow_cell[ng];
-
 	// cell to which flow from the cell goes
-	outflow_cell(G_LDD, GCRC_2, G_row, G_column, G_outflow_cell, output_dir);
+	Grid<int> G_outflow_cell = outflow_cell(G_LDD, GCRC_2, G_row, G_column, outputDirectory);
 
 	// numbers of neighbouring cells of each cell
-	int G_neighbourCell[ng][8];
-	neighbouring_cells(GCRC_2, G_row, G_column, G_neighbourCell, output_dir);
+	VariableChannelGrid<8,int> G_neighbourCell = neighbouring_cells(GCRC_2, G_row, G_column, outputDirectory);
 
 	// calculate distances between cells and create file which is consistent 
 	// with 'inflow cells'
-	float cell_distance[9][360];
-
-	calculate_distances(cell_distance, output_dir);
+    VariableChannelGrid<360,float,true,9> cell_distance = calculate_distances(outputDirectory);
 
 	// calculate slope of flow direction
-	float G_altitude[ng];
-
-	sprintf(filename, "%s/GALTMOD.UNF0", input_dir);
-	gridIO.readUnfFile(filename, ng, G_altitude);
+	Grid<float> G_altitude;
+	G_altitude.read(inputDirectory + "/GALTMOD.UNF0");
 
 	// calculate river length
-	float G_meandering_ratio[ng];
-	
-	sprintf(filename, "%s/G_MEANDERING_RATIO.UNF0", input_dir);
-	gridIO.readUnfFile(filename, ng, G_meandering_ratio);
+	Grid<float> G_meandering_ratio;
+	G_meandering_ratio.read(inputDirectory  +"/G_MEANDERING_RATIO.UNF0");
 
-    calculate_river_slope(G_meandering_ratio, cell_distance, G_altitude, G_outflow_cell, G_LDD, G_row, output_dir); //LA (2014-02-12): meandering ratio added
-    calculate_river_length(G_meandering_ratio, G_row, G_column, cell_distance, G_outflow_cell, output_dir);
+    calculate_river_slope(G_meandering_ratio, cell_distance, G_altitude, G_outflow_cell, G_LDD, G_row, outputDirectory);
+    calculate_river_length(G_meandering_ratio, G_row, G_column, cell_distance, G_outflow_cell, outputDirectory);
 
-	int G_routOrder[ng]; 	
-	rout_order(G_routOrder, G_inflow_cells, G_outflow_cell, output_dir);
+	Grid<int> G_routOrder = rout_order(G_inflow_cells, G_outflow_cell, outputDirectory);
 	
-	if (resOpt == 1) reservoir_prepare(G_outflow_cell, input_dir, output_dir, G_row);
-	
+	if (resOpt == 1) {
+		reservoir_prepare(G_outflow_cell, G_row, inputDirectory, outputDirectory);
+	}
 }
 
 
-void replace_flow_to_ocean(int GCRC_2[722][362], short *G_row, short *G_column, char *G_LDD)
+void replace_flow_to_ocean(const VariableChannelGrid<362,int,true,722> GCRC_2, const Grid<short> G_row, const Grid<short> G_column, Grid<char> & G_LDD)
 {
 	int n;
 	short row, col;
-
 	cout << "Assigning pits to cells with flow into ocean cells ..." << endl;
 
 	// give value of 5 also to those cells which have 100 percent  
@@ -337,63 +287,61 @@ void replace_flow_to_ocean(int GCRC_2[722][362], short *G_row, short *G_column, 
 	// CAUTION !!! If this is used, further adjustments might have to be done 
 	// for inland sinks !!!
 	for (n = 0; n <= (ng - 1); n++)
-		//if (G_LDD[n] != 5) 
 		if ( (G_LDD[n] != 5) && (G_LDD[n] != -1) ) 
 		{
 			row = G_row[n];
 			col = G_column[n];
 
 			// flow from NE to SW 
-			if ((GCRC_2[col - 1][row + 1] == 0)
+			if ((GCRC_2(col - 1,row + 1) == 0)
 				&& (G_LDD[n] == 1)) {
 				G_LDD[n] = 5;
 			}
 			// flow from N to S 
-			if ((GCRC_2[col][row + 1] == 0)
+			if ((GCRC_2(col,row + 1) == 0)
 				&& (G_LDD[n] == 2)) {
 				G_LDD[n] = 5;
 			}
 			// flow from NW to SE
-			if ((GCRC_2[col + 1][row + 1] == 0)
+			if ((GCRC_2(col + 1,row + 1) == 0)
 				&& (G_LDD[n] == 3)) {
 				G_LDD[n] = 5;
 			}
 			// flow from E to W  
-			if ((GCRC_2[col - 1][row] == 0)
+			if ((GCRC_2(col - 1,row) == 0)
 				&& (G_LDD[n] == 4)) {
 				G_LDD[n] = 5;
 			}
 			// flow from W to E    
-			if ((GCRC_2[col + 1][row] == 0)
+			if ((GCRC_2(col + 1,row) == 0)
 				&& (G_LDD[n] == 6)) {
 				G_LDD[n] = 5;
 			}
 			// flow from SE to NW    
-			if ((GCRC_2[col - 1][row - 1] == 0)
+			if ((GCRC_2(col - 1,row - 1) == 0)
 				&& (G_LDD[n] == 7)) {
 				G_LDD[n] = 5;
 			}
 			// flow from S to N    
-			if ((GCRC_2[col][row - 1] == 0)
+			if ((GCRC_2(col,row - 1) == 0)
 				&& (G_LDD[n] == 8)) {
 				G_LDD[n] = 5;
 			}
 			// flow from SW to NE 
-			if ((GCRC_2[col + 1][row - 1] == 0)
+			if ((GCRC_2(col + 1,row - 1) == 0)
 				&& (G_LDD[n] == 9)) {
 				G_LDD[n] = 5;
 			}
 		}
 }
 
-void inflow_cells(char *G_LDD,
-				  int GCRC_2[722][362],
-				  short *G_row, short *G_column, int G_inflow_cells[ng][9], char *output_dir)
+VariableChannelGrid<9,int> inflow_cells(const Grid<char> G_LDD, const VariableChannelGrid<362,int,true,722> GCRC_2,
+				  const Grid<short> G_row, const Grid<short> G_column, const string output_dir)
 {
 	int a1, a2, a3, a4, a6, a7, a8, a9;
 	short row, col;
 
-	char filename[250];
+	VariableChannelGrid<9,int> G_inflow_cells;
 
 	cout << "Determine cell numbers of inflowing cells ..." << endl;
 
@@ -409,7 +357,7 @@ void inflow_cells(char *G_LDD,
 	a9 = 0;
 	for (int n = 0; n < ng; ++n)
 		for (short i = 0; i < 9; ++i)
-			G_inflow_cells[n][i] = 0;
+			G_inflow_cells(n,i) = 0;
 
 	for (int n = 0; n < ng; ++n) {
 
@@ -417,51 +365,51 @@ void inflow_cells(char *G_LDD,
 		col = G_column[n];
 
 		// flow from NE to SW 
-		if ((GCRC_2[col + 1][row - 1] != 0)
-			&& (G_LDD[GCRC_2[col + 1][row - 1] - 1] == 1)) {
-			G_inflow_cells[n][9 - 1] = GCRC_2[col + 1][row - 1];
+		if ((GCRC_2(col + 1,row - 1) != 0)
+			&& (G_LDD[GCRC_2(col + 1,row - 1) - 1] == 1)) {
+			G_inflow_cells(n,9 - 1) = GCRC_2(col + 1,row - 1);
 			a1++;
 		}
 		// flow from N to S 
-		if ((GCRC_2[col][row - 1] != 0)
-			&& (G_LDD[GCRC_2[col][row - 1] - 1] == 2)) {
-			G_inflow_cells[n][8 - 1] = GCRC_2[col][row - 1];
+		if ((GCRC_2(col,row - 1) != 0)
+			&& (G_LDD[GCRC_2(col,row - 1) - 1] == 2)) {
+			G_inflow_cells(n,8 - 1) = GCRC_2(col,row - 1);
 			a2++;
 		}
 		// flow from NW to SE
-		if ((GCRC_2[col - 1][row - 1] != 0)
-			&& (G_LDD[GCRC_2[col - 1][row - 1] - 1] == 3)) {
-			G_inflow_cells[n][7 - 1] = GCRC_2[col - 1][row - 1];
+		if ((GCRC_2(col - 1,row - 1) != 0)
+			&& (G_LDD[GCRC_2(col - 1,row - 1) - 1] == 3)) {
+			G_inflow_cells(n,7 - 1) = GCRC_2(col - 1,row - 1);
 			a3++;
 		}
 		// flow from E to W  
-		if ((GCRC_2[col + 1][row] != 0)
-			&& (G_LDD[GCRC_2[col + 1][row] - 1] == 4)) {
-			G_inflow_cells[n][6 - 1] = GCRC_2[col + 1][row];
+		if ((GCRC_2(col + 1,row) != 0)
+			&& (G_LDD[GCRC_2(col + 1,row) - 1] == 4)) {
+			G_inflow_cells(n,6 - 1) = GCRC_2(col + 1,row);
 			a4++;
 		}
 		// flow from W to E    
-		if ((GCRC_2[col - 1][row] != 0)
-			&& (G_LDD[GCRC_2[col - 1][row] - 1] == 6)) {
-			G_inflow_cells[n][4 - 1] = GCRC_2[col - 1][row];
+		if ((GCRC_2(col - 1,row) != 0)
+			&& (G_LDD[GCRC_2(col - 1,row) - 1] == 6)) {
+			G_inflow_cells(n,4 - 1) = GCRC_2(col - 1,row);
 			a6++;
 		}
 		// flow from SE to NW    
-		if ((GCRC_2[col + 1][row + 1] != 0)
-			&& (G_LDD[GCRC_2[col + 1][row + 1] - 1] == 7)) {
-			G_inflow_cells[n][3 - 1] = GCRC_2[col + 1][row + 1];
+		if ((GCRC_2(col + 1,row + 1) != 0)
+			&& (G_LDD[GCRC_2(col + 1,row + 1) - 1] == 7)) {
+			G_inflow_cells(n,3 - 1) = GCRC_2(col + 1,row + 1);
 			a7++;
 		}
 		// flow from S to N    
-		if ((GCRC_2[col][row + 1] != 0)
-			&& (G_LDD[GCRC_2[col][row + 1] - 1] == 8)) {
-			G_inflow_cells[n][2 - 1] = GCRC_2[col][row + 1];
+		if ((GCRC_2(col,row + 1) != 0)
+			&& (G_LDD[GCRC_2(col,row + 1) - 1] == 8)) {
+			G_inflow_cells(n,2 - 1) = GCRC_2(col,row + 1);
 			a8++;
 		}
 		// flow from SW to NE 
-		if ((GCRC_2[col - 1][row + 1] != 0)
-			&& (G_LDD[GCRC_2[col - 1][row + 1] - 1] == 9)) {
-			G_inflow_cells[n][1 - 1] = GCRC_2[col - 1][row + 1];
+		if ((GCRC_2(col - 1,row + 1) != 0)
+			&& (G_LDD[GCRC_2(col - 1,row + 1) - 1] == 9)) {
+			G_inflow_cells(n,1 - 1) = GCRC_2(col - 1,row + 1);
 			a9++;
 		}
 	}
@@ -480,18 +428,21 @@ void inflow_cells(char *G_LDD,
 	for (n = 0; n <= ng - 1; n++) {
 		printf("%ld : ", n + 1);
 		for (short j = 0; j <= 8; j++)
-			printf("%ld ", G_inflow_cells[n][j]);
+			printf("%ld ", G_inflow_cells(n,j));
 		printf("\n");
 	}
 #endif
 
-	sprintf(filename, "%s/G_INFLC.9.UNF4", output_dir);
-	gridIO.writeUnfFile(filename, 9 * ng, &G_inflow_cells[0][0]);
+	G_inflow_cells.write(output_dir + "/G_INFLC.9.UNF4");
+
+	return G_inflow_cells;
 }
 
 
-void flow_accumulation(int G_inflow_cells[ng][9], short *G_flow_acc)
+Grid<short> flow_accumulation(const VariableChannelGrid<9,int> G_inflow_cells)
 {
+	Grid<short> G_flow_acc;
+
 	int n, i, cells_left, cells_left_prev_step;
 	short to_be_done_later, flow_acc;
 
@@ -505,7 +456,7 @@ void flow_accumulation(int G_inflow_cells[ng][9], short *G_flow_acc)
 	// 0: inflow cell has been found
 	for (n = 0; n <= (ng - 1); n++)
 		for (i = 0; i <= 8; i++)
-			if (G_inflow_cells[n][i] != 0)
+			if (G_inflow_cells(n,i) != 0)
 				G_flow_acc[n] = 0;
 
 	cells_left = 99999;
@@ -521,16 +472,16 @@ void flow_accumulation(int G_inflow_cells[ng][9], short *G_flow_acc)
 			{
 				to_be_done_later = 0;
 				for (i = 0; i <= 8; i++)
-					if ((G_inflow_cells[n][i] != 0)
-						&& (G_flow_acc[G_inflow_cells[n][i] - 1] == 0))
+					if ((G_inflow_cells(n,i) != 0)
+						&& (G_flow_acc[G_inflow_cells(n,i) - 1] == 0))
 						// has flow acc. been calculated for all inflow cells 'i' ? 
 						to_be_done_later = 1;
 				if (0 == to_be_done_later) {
 					flow_acc = 1;	// the cell itself 
 					// sum up accumulation values of all inflow cells 
 					for (i = 0; i <= 8; i++)
-						if (G_inflow_cells[n][i] != 0)
-							flow_acc += G_flow_acc[G_inflow_cells[n][i] - 1];
+						if (G_inflow_cells(n,i) != 0)
+							flow_acc += G_flow_acc[G_inflow_cells(n,i) - 1];
 					G_flow_acc[n] = flow_acc;
 				} else
 					cells_left++;
@@ -538,19 +489,20 @@ void flow_accumulation(int G_inflow_cells[ng][9], short *G_flow_acc)
 		cout << "  Flow accumulation: still to do: " << cells_left << " cells" << endl;
 	}
 	while ((cells_left > 0) && (cells_left_prev_step - cells_left != 0));
+
+	return G_flow_acc;
 }
 
 
-unsigned short derive_basins(char *G_LDD,
-							 int G_inflow_cells[ng][9],
-							 unsigned short *G_watersheds, char *output_dir)
+unsigned short derive_basins(Grid<char>& G_LDD,
+							 const VariableChannelGrid<9,int> G_inflow_cells,
+							 Grid<unsigned short>& G_watersheds, const string output_dir)
 {
-	char filename[250];
-	char G_done[ng];	// array to mark cells where calculations are finished 
+	Grid<char> G_done;	// array to mark cells where calculations are finished
 
 	// distance to outlet cell
 	// measured as number of cells
-	unsigned short G_dist[ng];
+	Grid<unsigned short> G_dist;
 
 	unsigned short nb;	// number of waterbasins 
 
@@ -576,7 +528,6 @@ unsigned short derive_basins(char *G_LDD,
 			// this case should not occur in the final LDD file 
 			G_LDD[n] = 5;
 		}
-		//if (5 == G_LDD[n]) 
 		if ( (5 == G_LDD[n]) || (-1 == G_LDD[n]) ) 
 		{
 			G_done[n] = 1;
@@ -607,9 +558,9 @@ unsigned short derive_basins(char *G_LDD,
 				// done == 2: 
 				//     everything is finished for that cell                    
 				for (j = 0; j <= 8; j++)
-					if (G_inflow_cells[n][j] != 0) {
-						G_watersheds[G_inflow_cells[n][j] - 1] = G_watersheds[n];
-						G_done[G_inflow_cells[n][j] - 1] = -1;
+					if (G_inflow_cells(n,j) != 0) {
+						G_watersheds[G_inflow_cells(n,j) - 1] = G_watersheds[n];
+						G_done[G_inflow_cells(n,j) - 1] = -1;
 						// a faster solution would be to set G_done = 1 here
 						// but for that case G_dist is not calculated well
 					}
@@ -619,23 +570,19 @@ unsigned short derive_basins(char *G_LDD,
 			if (-1 == G_done[n])
 				G_done[n] = 1;
 		i++;
-		//cout << i << ' ' << k << endl;
 	}
 	while (k != 0);
 	i--;
 	cout << "  Number of cells within the intest chain: " << i << endl;
 
-	sprintf(filename, "%s/G_CELLS_TO_OUTLET.UNF2", output_dir);
-	gridIO.writeUnfFile(filename, ng, G_dist);
+	G_dist.write(output_dir + "/G_CELLS_TO_OUTLET.UNF2");
 
-	sprintf(filename, "%s/G_BASINS.UNF2", output_dir);
-	gridIO.writeUnfFile(filename, ng, G_watersheds);
+	G_watersheds.write(output_dir + "/G_BASINS.UNF2");
 
 	return nb;	// number of waterbasins
 }
 
-unsigned short reindex_waterbasins(unsigned short nb,
-								   short *basin_cells, unsigned short *G_watersheds)
+unsigned short reindex_waterbasins(const unsigned short nb, const Grid<short, true, nb_max> basin_cells, Grid<unsigned short>& G_watersheds)
 {
 	cout << "Reindexing waterbasins ..." << endl;
 
@@ -669,104 +616,92 @@ unsigned short reindex_waterbasins(unsigned short nb,
 	return j;	// new number of waterbasins
 }
 
-
-void outflow_cell(char *G_LDD,
-				  int GCRC_2[722][362],
-				  short *G_row, short *G_column, int *G_outflow_cell, char *output_dir)
+Grid<int> outflow_cell(const Grid<char> G_LDD, const VariableChannelGrid<362,int,true,722> GCRC_2,
+				  const Grid<short> G_row, const Grid<short> G_column, const string output_dir)
 {
-	short row, col;
-	int n;
-
-	char filename[250];
+	Grid<int> G_outflow_cell;
 
 	cout << "Determine cell number of the cell to which flow goes ..." << endl;
 
-	// determine the cell number to which flow
-	// occurs 
-	for (n = 0; n <= ng - 1; n++) {
+	// determine the cell number to which flow occurs
+	for (int n = 0; n <= ng - 1; n++) {
 
-		row = G_row[n];
-		col = G_column[n];
+		short row = G_row[n];
+		short col = G_column[n];
 
-		//if (5 == G_LDD[n])
 		if ( (5 == G_LDD[n]) || (-1 == G_LDD[n]) )
 			G_outflow_cell[n] = 0;
 
 		// flow from NE to SW 
 		if (1 == G_LDD[n])
-			G_outflow_cell[n] = GCRC_2[col - 1][row + 1];
+			G_outflow_cell[n] = GCRC_2(col - 1,row + 1);
 
 		// flow from N to S 
 		if (2 == G_LDD[n])
-			G_outflow_cell[n] = GCRC_2[col][row + 1];
+			G_outflow_cell[n] = GCRC_2(col,row + 1);
 
 		// flow from NW to SE
 		if (3 == G_LDD[n])
-			G_outflow_cell[n] = GCRC_2[col + 1][row + 1];
+			G_outflow_cell[n] = GCRC_2(col + 1,row + 1);
 
 		// flow from E to W  
 		if (4 == G_LDD[n])
-			G_outflow_cell[n] = GCRC_2[col - 1][row];
+			G_outflow_cell[n] = GCRC_2(col - 1,row);
 
 		// flow from W to E  
 		if (6 == G_LDD[n])
-			G_outflow_cell[n] = GCRC_2[col + 1][row];
+			G_outflow_cell[n] = GCRC_2(col + 1,row);
 
 		// flow from SE to NW    
 		if (7 == G_LDD[n])
-			G_outflow_cell[n] = GCRC_2[col - 1][row - 1];
+			G_outflow_cell[n] = GCRC_2(col - 1,row - 1);
 
 		// flow from S to N  
 		if (8 == G_LDD[n])
-			G_outflow_cell[n] = GCRC_2[col][row - 1];
+			G_outflow_cell[n] = GCRC_2(col,row - 1);
 
 		// flow from SW to NE 
 		if (9 == G_LDD[n])
-			G_outflow_cell[n] = GCRC_2[col + 1][row - 1];
+			G_outflow_cell[n] = GCRC_2(col + 1,row - 1);
 	}
-	sprintf(filename, "%s/G_OUTFLC.UNF4", output_dir);
-	gridIO.writeUnfFile(filename, ng, G_outflow_cell);
+	G_outflow_cell.write(output_dir + "/G_OUTFLC.UNF4");
+
+	return G_outflow_cell;
 }
 
-void neighbouring_cells(int GCRC_2[722][362], short *G_row, short *G_column, int G_neighbourCell[ng][8], char *output_dir)
+VariableChannelGrid<8,int> neighbouring_cells(const VariableChannelGrid<362,int,true,722> GCRC_2, const Grid<short> G_row, const Grid<short> G_column, const string output_dir)
 {
 	short row, col;
-	long n;
 
-	char filename[250];
-	//Ellen
+	VariableChannelGrid<8,int> G_neighbourCell;
+
 	cout << "find neighbouring cells of each cell..." << endl;
 
-	// determine the cell number to which flow
-	// occurs
-	for (n = 0; n <= ng - 1; n++) {
+	// determine the cell number to which flow occurs
+	for (long n = 0; n <= ng - 1; n++) {
 		row = G_row[n];
 		col = G_column[n];
 
-       	G_neighbourCell[n][0] = GCRC_2[col + 1][row];
-       	G_neighbourCell[n][1] = GCRC_2[col + 1][row - 1];
-       	G_neighbourCell[n][2] = GCRC_2[col][row - 1];
-       	G_neighbourCell[n][3] = GCRC_2[col - 1][row - 1];
-       	G_neighbourCell[n][4] = GCRC_2[col - 1][row];
-       	G_neighbourCell[n][5] = GCRC_2[col - 1][row + 1];
-       	G_neighbourCell[n][6] = GCRC_2[col][row + 1];
-       	G_neighbourCell[n][7] = GCRC_2[col + 1][row + 1];
+       	G_neighbourCell(n,0) = GCRC_2(col + 1,row);
+       	G_neighbourCell(n,1) = GCRC_2(col + 1,row - 1);
+       	G_neighbourCell(n,2) = GCRC_2(col,row - 1);
+       	G_neighbourCell(n,3) = GCRC_2(col - 1,row - 1);
+       	G_neighbourCell(n,4) = GCRC_2(col - 1,row);
+       	G_neighbourCell(n,5) = GCRC_2(col - 1,row + 1);
+       	G_neighbourCell(n,6) = GCRC_2(col,row + 1);
+       	G_neighbourCell(n,7) = GCRC_2(col + 1,row + 1);
 
 	}
-	sprintf(filename, "%s/G_NEIGHBOUR_CELLS.8.UNF4", output_dir);
-	gridIO.writeUnfFile(filename, ng * 8, &G_neighbourCell[0][0]);
+	G_neighbourCell.write(output_dir + "/G_NEIGHBOUR_CELLS.8.UNF4");
+
+	return G_neighbourCell;
 }
 
-void calculate_distances(float cell_distance[9][360], char *output_dir)
+VariableChannelGrid<360, float, true, 9> calculate_distances(const std::string output_dir)
   // calculate vertical and horizontal distance to neighbour cell   
 {
 	char filename[250];
-
-	//float cell_distance[9][360];
-	// organized in the following structure: 
-	// 6 7 8 
-	// 3 4 5 
-	// 0 1 2 
+    VariableChannelGrid<360, float, true, 9> cell_distance;
 	const float pi = 3.141592653589793;
 	const float earth_radius = 6371.211;	// [km] 
 
@@ -782,11 +717,11 @@ void calculate_distances(float cell_distance[9][360], char *output_dir)
 	for (i = 0; i <= 359; i++) {
 		l = 0.25 + i * 0.5;
 		horiz_dist = 2 * pi * earth_radius * sin(l * pi / 180.0) * 0.5 / 360.0;
-		cell_distance[1][i] = vert_dist;
-		cell_distance[3][i] = horiz_dist;
-		cell_distance[4][i] = 0;
-		cell_distance[5][i] = horiz_dist;
-		cell_distance[7][i] = vert_dist;
+		cell_distance(1,i) = vert_dist;
+		cell_distance(3,i) = horiz_dist;
+		cell_distance(4,i) = 0;
+		cell_distance(5,i) = horiz_dist;
+		cell_distance(7,i) = vert_dist;
 	}
 
 	//                             
@@ -794,49 +729,48 @@ void calculate_distances(float cell_distance[9][360], char *output_dir)
 	//                             
 
 	for (i = 0; i <= 358; i++)
-		cell_distance[0][i] =
-			sqrt(cell_distance[3][i] * cell_distance[3][i + 1] +
-				 cell_distance[1][i] * cell_distance[1][i]);
-	cell_distance[0][359] = -99;
+		cell_distance(0,i) =
+			sqrt(cell_distance(3,i) * cell_distance(3,i+1) +
+				 cell_distance(1,i) * cell_distance(1,i));
+	cell_distance(0,359) = -99;
 	for (i = 1; i <= 359; i++)
-		cell_distance[6][i] =
-			sqrt(cell_distance[3][i] * cell_distance[3][i - 1] +
-				 cell_distance[1][i] * cell_distance[1][i]);
-	cell_distance[6][0] = -99;
+		cell_distance(6,i) =
+			sqrt(cell_distance(3,i) * cell_distance(3,i-1) +
+				 cell_distance(1,i) * cell_distance(1,i));
+	cell_distance(6,0) = -99;
 	for (i = 0; i <= 359; i++) {
-		cell_distance[2][i] = cell_distance[0][i];
-		cell_distance[8][i] = cell_distance[6][i];
+		cell_distance(2,i) = cell_distance(0,i);
+		cell_distance(8,i) = cell_distance(6,i);
 	}
 
 #ifdef debug
 	for (i = 0; i <= 359; i++) {
 		printf("%3d ", i);
 		for (short j = 0; j <= 8; j++)
-			printf("%10.6f ", cell_distance[j][i]);
+			printf("%10.6f ", cell_distance(j,i));
 		printf("\n");
 	}
 #endif
 
 	// store distances to file 
-	sprintf(filename, "%s/GCELLDIST.9.UNF0", output_dir);
-	gridIO.writeUnfFile(filename, 9 * 360, &cell_distance[0][0]);
+	cell_distance.write(output_dir + "/GCELLDIST.9.UNF0");
+	return cell_distance;
+
 }
 
-void calculate_river_slope(float *G_meandering_ratio,
-                           float cell_distance[9][360],
-                           float *G_altitude, //G_altitude = GALTMOD.UNF0
-						   int *G_outflow_cell, char *G_LDD, short *G_row, char *output_dir)
+void calculate_river_slope(const Grid<float> G_meandering_ratio, const VariableChannelGrid<360,float,true,9> cell_distance,
+                           const Grid<float> G_altitude, const Grid<int> G_outflow_cell,
+						   const Grid<char> G_LDD, const Grid<short> G_row, const string output_dir)
 {
+	//G_altitude = GALTMOD.UNF0
 	cout << "Calculating river slope ...\n";
-	float G_slope[ng];
+	Grid<float> G_slope;
 	int n, n_negative = 0, n_zero = 0;
-
 	for (n = 0; n <= ng - 1; n++) {
-		//if ((G_outflow_cell[n] != 0) && (G_LDD[n] != 5)) 
 		if ( (G_outflow_cell[n] != 0) && ((G_LDD[n] != 5) && (G_LDD[n] != -1)) ) 
 		{
             G_slope[n] = (G_altitude[n] - G_altitude[G_outflow_cell[n] - 1])
-                / (1000.0 * cell_distance[G_LDD[n] - 1][G_row[n] - 1]*((G_meandering_ratio[n]+G_meandering_ratio[G_outflow_cell[n]-1])/2)); //(2014-02-12) LA added: *((G_meandering_ratio[n]+G_meandering_ratio[G_outflow_cell[n]-1])/2))
+                / (1000.0 * cell_distance(G_LDD[n] - 1,G_row[n] - 1)*((G_meandering_ratio[n]+G_meandering_ratio[G_outflow_cell[n]-1])/2)); //(2014-02-12) LA added: *((G_meandering_ratio[n]+G_meandering_ratio[G_outflow_cell[n]-1])/2))
 			if (G_slope[n] < 0)
 				n_negative++;
 			if (G_slope[n] == 0)
@@ -856,17 +790,14 @@ void calculate_river_slope(float *G_meandering_ratio,
 		if (G_slope[n] < minslope)
 			G_slope[n] = minslope;
 
-	char filename[250];
-
-	sprintf(filename, "%s/G_RIVERSLOPE.UNF0", output_dir);
-	gridIO.writeUnfFile(filename, ng, G_slope);
+	G_slope.write(output_dir + "/G_RIVERSLOPE.UNF0");
 }
 
-void calculate_river_length(float *G_meandering_ratio, short *G_row, short *G_column, float cell_distance[9][360], 
-  int *G_outflow_cell, char *output_dir) {
-	
-	cout << "Calculating river length..."<<endl;
-	float G_river_length[ng];
+void calculate_river_length(const Grid<float> G_meandering_ratio, const Grid<short> G_row, const Grid<short> G_column,
+						const VariableChannelGrid<360,float,true,9> cell_distance, const Grid<int> G_outflow_cell, const string output_dir)
+{
+	cout << "Calculating river length..."<< endl;
+	Grid<float> G_river_length;
 	
 	int n_outflow;
 
@@ -875,17 +806,17 @@ void calculate_river_length(float *G_meandering_ratio, short *G_row, short *G_co
 		if (n_outflow==-1) 
 			G_river_length[n]=55.;
 		else if (G_row[n]==G_row[n_outflow])
-			G_river_length[n]=cell_distance[3][G_row[n]-1];  //west
+			G_river_length[n]=cell_distance(3,G_row[n]-1);  //west
 		else {
 			if (G_row[n]>G_row[n_outflow]) {
 			 	if (G_column[n]==G_column[n_outflow])
-			 		G_river_length[n]=cell_distance[7][G_row[n]-1];  //north
-			 	else G_river_length[n]=cell_distance[8][G_row[n]-1];                       //north east
+			 		G_river_length[n]=cell_distance(7,G_row[n]-1);  //north
+			 	else G_river_length[n]=cell_distance(8,G_row[n]-1);                       //north east
 			}
 			else {
 				if (G_column[n]==G_column[n_outflow])
-					G_river_length[n]=cell_distance[1][G_row[n]-1];  //south
-			 	else G_river_length[n]=cell_distance[2][G_row[n]-1];                       //south east
+					G_river_length[n]=cell_distance(1,G_row[n]-1);  //south
+			 	else G_river_length[n]=cell_distance(2,G_row[n]-1);                       //south east
 			}
 		}
 		
@@ -896,18 +827,17 @@ void calculate_river_length(float *G_meandering_ratio, short *G_row, short *G_co
 
 	}
 	
-	char filename[250];
-
-	sprintf(filename, "%s/G_RIVER_LENGTH.UNF0", output_dir);
-	gridIO.writeUnfFile(filename, ng, G_river_length);
+	G_river_length.write(output_dir + "/G_RIVER_LENGTH.UNF0");
 
 }
 
-void rout_order(int *G_routOrder, int G_upstreamCells[ng][9], int *G_outflow_cell, char *output_dir) {
+Grid<int> rout_order(const VariableChannelGrid<9,int> G_upstreamCells, const Grid<int> G_outflow_cell, const string output_dir)
+{
+	Grid<int> routing;  	// count inflow cells
+	Grid<int> list; 	 	// count inflow cells
 	
-	int routing[ng];  	// count inflow cells
-	int list[ng]; 	 	// count inflow cells
-	
+	Grid<int> G_routOrder;
+
 	cout << "Calculating routing order" << endl;
 
 	for (int n = 0; n < ng; n++){ 
@@ -918,7 +848,7 @@ void rout_order(int *G_routOrder, int G_upstreamCells[ng][9], int *G_outflow_cel
 	
 	for (int n = 0; n < ng; ++n)
 		for (short i = 0; i < 9; ++i) 
-			if (G_upstreamCells[n][i]>0) routing[n] ++;
+			if (G_upstreamCells(n,i)>0) routing[n] ++;
 	
 	int counter=0;
 	int counterStep;
@@ -950,45 +880,32 @@ void rout_order(int *G_routOrder, int G_upstreamCells[ng][9], int *G_outflow_cel
 			exit(-1);
 	}
 	
-	char filename[250];
+	G_routOrder.write(output_dir + "/G_ROUT_ORDER.UNF4");
 
-	sprintf(filename, "%s/G_ROUT_ORDER.UNF4", output_dir);
-	gridIO.writeUnfFile(filename, ng, G_routOrder);
+	return G_routOrder;
+}
 
-} //rout_order()
+void reservoir_prepare(const Grid<int> G_outflow_cell, const Grid<short> G_row, const string input_dir, const string output_dir)
+{
+	Grid<int> G_reservoir_area; // km2
 
-void reservoir_prepare(int *G_outflow_cell, char *input_dir, char *output_dir, short *G_row){
+	G_reservoir_area.read(input_dir + "/G_RESAREA.UNF0");
 
-	char filename[250];
-
-	int (*G_reservoir_area);	// km2
-	G_reservoir_area = new int [ng];
-	if (!G_reservoir_area) cerr << "ERROR: not enough memory for G_reservoir_area\n" << endl;
-
-        sprintf(filename, "%s/G_RESAREA.UNF0", input_dir);
-	gridIO.readUnfFile(filename, ng, &G_reservoir_area[0]);
-
-	//-----------------------------------------------
-
-    double (*G_mean_outflow);   //mean annual inflow to global lakes plus P-PET of global lake (1961-1990)
-    G_mean_outflow  	= new double [ng];
-    if (!G_mean_outflow) cerr << "ERROR: not enough memory for G_mean_outflow\n" << endl;
+	Grid<> G_mean_outflow;
 
     //read mean annual outflow of reservoirs (was called G_MEAN_INFLOW but is mean inflow plus P-PET of reservoir in fact (long term mean)
-    sprintf(filename, "%s/G_MEAN_OUTFLOW.UNF0", input_dir);
-    gridIO.readUnfFile(filename, ng, &G_mean_outflow[0]);
+	G_mean_outflow.read(input_dir + "/G_MEAN_OUTFLOW.UNF0");
 
-	//-----------------------------------------------
 	// store inflow of relevant reservoirs in each cell and the total sum 
-	double G_inflowReservoirs[ng];
-	double G_alloc_coeff[ng][reservoir_dsc];//allocation coefficient (< 1 if more than one reservoir is upstream)
+	Grid<> G_inflowReservoirs;
+	VariableChannelGrid<reservoir_dsc> G_alloc_coeff;//allocation coefficient (< 1 if more than one reservoir is upstream)
 
 	// initialize
 	for (int n = 0; n < ng; n++) {
 		G_inflowReservoirs[n] = 0.;
 
 		for (int i = 0; i < reservoir_dsc; i++)
-			G_alloc_coeff[n][i] = 1.0;
+			G_alloc_coeff(n,i) = 1.0;
 	}
 	
 	// store mean inflow for each cell and each reservoir
@@ -1004,7 +921,7 @@ void reservoir_prepare(int *G_outflow_cell, char *input_dir, char *output_dir, s
 			}
 
 		}
-	} //for(n)
+	}
 
 
 	// calculate allocation coefficient
@@ -1013,7 +930,7 @@ void reservoir_prepare(int *G_outflow_cell, char *input_dir, char *output_dir, s
 			short i=0; int downstreamCell=G_outflow_cell[n];
 			
 			while (i<reservoir_dsc && downstreamCell>0 && G_reservoir_area[downstreamCell-1]<=0) {
-                G_alloc_coeff[n][i]=G_mean_outflow[n]/G_inflowReservoirs[downstreamCell-1];
+                G_alloc_coeff(n,i)=G_mean_outflow[n]/G_inflowReservoirs[downstreamCell-1];
 				
 				// next downstream cell
 				downstreamCell = G_outflow_cell[downstreamCell-1]; i++;
@@ -1022,25 +939,22 @@ void reservoir_prepare(int *G_outflow_cell, char *input_dir, char *output_dir, s
 			
 		}
 		
-	} // for(n)
+	}
 	
-	sprintf(filename, "%s/G_ALLOC_COEFF.%d.UNF0", output_dir, reservoir_dsc);
-	gridIO.writeUnfFile(filename, ng*reservoir_dsc, &G_alloc_coeff[0][0]);
+	G_alloc_coeff.write(output_dir + "/G_ALLOC_COEFF." + to_string(reservoir_dsc) + ".UNF0");
 	
 	cout << "calculation of allocation coefficient for downstream cells finished\n";
-	
-	//-----------------------------------------------
 
-    double (*G_mean_outflow_monthly)[12];   //mean annual outflow to global lakes (1971-1900)
-    G_mean_outflow_monthly  	= new double [ng][12];
-    if (!G_mean_outflow_monthly) cerr << "ERROR: not enough memory for G_mean_outflow_monthly\n" << endl;
+	//mean annual outflow to global lakes (1971-1900)
+	MonthlyGrid<> G_mean_outflow_monthly;
 
     //read mean annual inflow and P-PET of reservoirs (long term mean)
-    sprintf(filename, "%s/G_MEAN_OUTFLOW.12.UNF0", input_dir);
-    gridIO.readUnfFile(filename, ng*12, &G_mean_outflow_monthly[0][0]);
+	G_mean_outflow_monthly.read(input_dir + "/G_MEAN_OUTFLOW.12.UNF0");
+
     cout << "G_MEAN_OUTFLOW read\n";
 	
-	char G_start_month[ng];	// start of operational year
+	// start of operational year
+	Grid<char> G_start_month;
 	
 	for (int n = 0; n < ng; n++){
 		G_start_month[n]=1;
@@ -1049,8 +963,8 @@ void reservoir_prepare(int *G_outflow_cell, char *input_dir, char *output_dir, s
 		/*
         // variante 1: first month (from january) when mean monthly inflow plus P - PET < mean annual inflow plus P - PET
 		for (int month=0; month<12; month++) {
-            if (n==0) cout <<"----\t"<< n<<'\t'<<month<< '\t'<<G_mean_outflow_monthly[n][month]<<'\t'<<G_mean_outflow[n]<<endl;
-            if (G_mean_outflow_monthly[n][month]<G_mean_outflow[n]) {
+            if (n==0) cout <<"----\t"<< n<<'\t'<<month<< '\t'<<G_mean_outflow_monthly(n,month)<<'\t'<<G_mean_outflow[n]<<endl;
+            if (G_mean_outflow_monthly(n,month)<G_mean_outflow[n]) {
 				G_start_month[n]=month+1; 
 				if (n==0) cout <<"++++G_start_month["<<n<<"]:"<<G_start_month[n]<<endl;
 				break; 
@@ -1064,12 +978,12 @@ void reservoir_prepare(int *G_outflow_cell, char *input_dir, char *output_dir, s
         //           : in southern hemisphere: from december backwards first month when mean monthly inflow plus P - PET > mean annual inflow plus P - PET
 		if (-(G_row[n] / 2.0 - 90.25) > 0.0) {// northern hemisphere
 			for (int month=0; month<12; month++) {
-                if (G_mean_outflow_monthly[n][month]<G_mean_outflow[n]) {G_start_month[n]=month+1; break;}
+                if (G_mean_outflow_monthly(n,month)<G_mean_outflow[n]) {G_start_month[n]=month+1; break;}
 			} // for(month)
 		}
 		else { // southern hemisphere
 			for (int month=11; month>=0; month--) {
-                if (G_mean_outflow_monthly[n][month]>=G_mean_outflow[n]) {G_start_month[n]=month+1; break;}
+                if (G_mean_outflow_monthly(n,month)>=G_mean_outflow[n]) {G_start_month[n]=month+1; break;}
 			} // for(month)
 		}
 		*/
@@ -1080,14 +994,14 @@ void reservoir_prepare(int *G_outflow_cell, char *input_dir, char *output_dir, s
 		
 		// finden erster Monat wo Monatswert >= Jahreswert. (beg_month)
 		// dann finden laengste Trockenperiode (wo Monatswert<Jahreswert). Suchen nicht ab Januar sondern ab beg_month
-                // damit erreichen wir, dass alle trockene Periode ganz sind (auch wenn die ueber Jahresende dauern)
+        // damit erreichen wir, dass alle trockene Periode ganz sind (auch wenn die ueber Jahresende dauern)
 		int beg_month=0; int month=0;
-        while (month<12 && G_mean_outflow_monthly[n][month]<G_mean_outflow[n]) month++;
+        while (month<12 && G_mean_outflow_monthly(n,month)<G_mean_outflow[n]) month++;
 		beg_month=month;
 		
 		for (int m=0; m<12; m++) {
 			month=m+beg_month; if (month>11) month-=12;
-            if (G_mean_outflow_monthly[n][month]<G_mean_outflow[n] ) {
+            if (G_mean_outflow_monthly(n,month)<G_mean_outflow[n] ) {
 				counter_length++; 
 				if (!last_dry) {start_=month; last_dry=true;}
 			}
@@ -1105,21 +1019,13 @@ void reservoir_prepare(int *G_outflow_cell, char *input_dir, char *output_dir, s
 		G_start_month[n]=start+1;
 		//------------------
 		
-	} // for(n)
-	{
-		int count=0;
-		for (int n = 0; n < ng; n++) if (G_start_month[0]==0) count++;
-		cout << "*** is 0: " <<count<<endl;
 	}
-	sprintf(filename, "%s/G_START_MONTH.UNF1", output_dir);
-	gridIO.writeUnfFile(filename, ng, &G_start_month[0]);
-	
-	
-	cout << "calculation of first month of release period finished\n";
 
-    delete[] G_mean_outflow;         G_mean_outflow = NULL;
-    delete[] G_mean_outflow_monthly; G_mean_outflow_monthly = NULL;
-	delete[] G_reservoir_area;      G_reservoir_area = NULL;
+	int count=0;
+	for (int n = 0; n < ng; n++) if (G_start_month[0]==0) count++;
+	cout << "*** is 0: " <<count<<endl;
 	
-	
-} //reservoir_prepare()
+	G_start_month.write(output_dir + "/G_START_MONTH.UNF1");
+
+	cout << "calculation of first month of release period finished\n";
+}

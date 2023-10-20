@@ -10,33 +10,32 @@
 ***********************************************************************/
 #include <cstdio>
 #include <cmath>
-#include <iostream>
-#include <iomanip>
-#include <fstream>
-#include <vector>
+//#include <iostream>
+//#include <iomanip>
+//#include <fstream>
+//#include <vector>
 #include <cstdlib>
 #include <cstring>
 
-#include "clcl.h"
-#include "option.h"
+//#include "clcl.h"
+//#include "option.h"
+#include "common.h"
 #include "math.h"
-#include "climate.h"
-#include "geo.h"
+//#include "climate.h"
+//#include "geo.h"
 #include "def.h"
+#include "globals.h"
 
 using namespace std;
 
-extern climateClass climate;
-extern geoClass geo;
+//extern climateClass climate;
+//extern geoClass geo;
 
 clclClass::clclClass() {
 }
 
 void clclClass::init()
 {
-	clcl_alpha = new float [ng];
-	cls = new short[ng];
-
 	for (int n = 0; n < ng; n++) {
 		clcl_alpha[n] = 0.;
 		cls[n] = 0;
@@ -46,65 +45,64 @@ void clclClass::init()
 
 void clclClass::cleanup()
 {
-	delete[] clcl_alpha;   clcl_alpha  = NULL;
-	delete[] cls;			cls  		= NULL;
 }
 
 void clclClass::calcKoep()
 {
-  // koeppen climate classification
-  // the following 28 classes are calculated, 30 can be calculated:
-  // *A*
-  // 11 ... Af
-  // 12 ... Am
-  // 13 ... Aw
-  // *B*
-  // 20 ... BW			// 21 ... BWk 
-  						// 22 ... BWh
-  // 25 ... BS			// 26 ... BSk
-						// 27 ... BSh
-  // *C*
-  // 31 ... Cfa
-  // 32 ... Cfb
-  // 33 ... Cfc
-  // 34 ... Csa			
-  // 35 ... Csb
-  // 36 ... Csc
-  // 37 ... Cwa
-  // 38 ... Cwb
-  // 39 ... Cwc
-  // *D*
-  // 41 ... Dfa
-  // 42 ... Dfb
-  // 43 ... Dfc
-  // 44 ... Dfd
-  // 45 ... Dsa
-  // 46 ... Dsb
-  // 47 ... Dsc
-  // 48 ... Dsd
-  // 49 ... Dwa
-  // 50 ... Dwb
-  // 51 ... Dwc
-  // 52 ... Dwd
-  // *E*
-  // 61 ... EF
-  // 62 ... ET
-  // -------------------------------------------------------------------//
+	// koeppen climate classification
+	// the following 28 classes are calculated, 30 can be calculated:
+	// *A*
+	// 11 ... Af
+	// 12 ... Am
+	// 13 ... Aw
+	// *B*
+	// 20 ... BW			// 21 ... BWk
+							// 22 ... BWh
+	// 25 ... BS			// 26 ... BSk
+							// 27 ... BSh
+	// *C*
+	// 31 ... Cfa
+	// 32 ... Cfb
+	// 33 ... Cfc
+	// 34 ... Csa
+	// 35 ... Csb
+	// 36 ... Csc
+	// 37 ... Cwa
+	// 38 ... Cwb
+	// 39 ... Cwc
+	// *D*
+	// 41 ... Dfa
+	// 42 ... Dfb
+	// 43 ... Dfc
+	// 44 ... Dfd
+	// 45 ... Dsa
+	// 46 ... Dsb
+	// 47 ... Dsc
+	// 48 ... Dsd
+	// 49 ... Dwa
+	// 50 ... Dwb
+	// 51 ... Dwc
+	// 52 ... Dwd
+	// *E*
+	// 61 ... EF
+	// 62 ... ET
+	// -------------------------------------------------------------------//
 
 	// koeppen parameters
-	float t_min[ng];     // coldest monthly temperature [°C]
-	float t_max[ng];     // warmerst monthly temperature [°C]
-	float t_ann[ng];     // mean annual temperature [°C]
-	short t_cnt[ng];	 // number of month with temp >= 10°C
-	float p_min[ng];	 // prec min value of all months [mm]
-	float p_max[ng];	 // prec max value of all months  [mm]
-	short p_min_loc[ng]; // month of prec min value
-	float p_sum[ng];     // sum yearly prec
-	float p_som[ng];     // mean summer prec [mm]
-	float p_win[ng];     // mean winter prec [mm]
-	float p_som_max[ng]; //	 summer max
-	float p_win_max[ng]; //	 summer min
-	short p_type[ng]; 	  // winter summer or constant rain
+
+	Grid<float> t_min;     // coldest monthly temperature [°C]
+	Grid<float> t_max;     // warmerst monthly temperature [°C]
+	Grid<float> t_ann;     // mean annual temperature [°C]
+	Grid<short>t_cnt;	 // number of month with temp >= 10°C
+	Grid<float> p_min;	 // prec min value of all months [mm]
+	Grid<float> p_max;	 // prec max value of all months  [mm]
+	Grid<short>p_min_loc; // month of prec min value
+	Grid<float> p_sum;     // sum yearly prec
+	Grid<float> p_som;     // mean summer prec [mm]
+	Grid<float> p_win;     // mean winter prec [mm]
+	Grid<float> p_som_max; //	 summer max
+	Grid<float> p_win_max; //	 summer min
+	Grid<short> p_type; 	  // winter summer or constant rain
 	
 	// initialisation
 	for (int n=0; n<ng; n++) {
@@ -123,69 +121,62 @@ void clclClass::calcKoep()
 		p_type[n]= -9999;
 		cls[n]=0;
 	}
-	
-	// following climate input is needed:
-	// temperature data, monthly values [0.01 oC]
-	//sprintf(filename, "%s/GTEMP_1961_1990.12.UNF2", options.climate_dir);
-	// monthly precipitation [mm]
-	//sprintf(filename, "%s/GPREC_1961_1990.12.UNF2", options.climate_dir);
 
 	for (int n = 0; n < ng; ++n) 
 	{
 		for (int month = 0; month < 12; month++) {
 
 			// temperature count: number of months with t >= 10°C
-			if ((climate.G_temperature[n][month]/100.0) >= 10.0){
+			if ((climate.G_temperature(n,month)/100.0) >= 10.0){
 				t_cnt[n] += 1;}
 			// determining temperature and precipitation minima and maxima
-			if ((climate.G_temperature[n][month]/100.0) < t_min[n]){
-				t_min[n] = (climate.G_temperature[n][month]/100.0);}
-			if ((climate.G_temperature[n][month]/100.0) > t_max[n]){
-				t_max[n] = climate.G_temperature[n][month]/100.0;}
+			if ((climate.G_temperature(n,month)/100.0) < t_min[n]){
+				t_min[n] = (climate.G_temperature(n,month)/100.0);}
+			if ((climate.G_temperature(n,month)/100.0) > t_max[n]){
+				t_max[n] = climate.G_temperature(n,month)/100.0;}
 
-			if (climate.G_precipitation[n][month] < p_min[n]){
-				p_min[n] = climate.G_precipitation[n][month];
+			if (climate.G_precipitation(n,month) < p_min[n]){
+				p_min[n] = climate.G_precipitation(n,month);
 				p_min_loc[n]= month;
 			}
-			if (climate.G_precipitation[n][month] > p_max[n]){
-				p_max[n] = climate.G_precipitation[n][month];}
+			if (climate.G_precipitation(n,month) > p_max[n]){
+				p_max[n] = climate.G_precipitation(n,month);}
 
 			//calculating mean annual temp
-			t_ann[n]+= (climate.G_temperature[n][month]/1200.0);  // temp in 0.01 °C, 12 monate
+			t_ann[n]+= (climate.G_temperature(n,month)/1200.0);  // temp in 0.01 °C, 12 monate
 
 			// calculating annual and seasonal prec
-			p_sum[n]+= climate.G_precipitation[n][month];
+			p_sum[n]+= climate.G_precipitation(n,month);
 
 			// p som enthält jeweils sommer-summen,dh. noerdl hemisphere monate 4-9
 			// suedl hemisphere monate 1-3+10-12; vice versa for winter
 			// p_som_max enthält max wert des sommers (noerdl hem aus 4-9, suedl aus 1-3,10-12
 			// p_win_max enthaelt max wert des winters (noerdl 1-3,10-12; suedl. 4-9)
 			// northern hemisphere
-//			if (n<53458){
-//			if (geo.G_row[n] <= nrow_north){
-			if (-(geo.G_row[n] / 2.0 - 90.25) > 0.0) { //wg2
+			if (-(geo.G_row[n] / 2.0 - 90.25) > 0.0) {
+				//wg2
 				if (3<month&&month<10){
-					p_som[n]+=climate.G_precipitation[n][month];
-					if (climate.G_precipitation[n][month] > p_som_max[n]){
-						p_som_max[n] = climate.G_precipitation[n][month];}
+					p_som[n]+=climate.G_precipitation(n,month);
+					if (climate.G_precipitation(n,month) > p_som_max[n]){
+						p_som_max[n] = climate.G_precipitation(n,month);}
 				}
 				if ((1<=month&&month<4)||(9<month&&month<=12)){
-					p_win[n]+=climate.G_precipitation[n][month];
-					if (climate.G_precipitation[n][month] > p_win_max[n]){
-						p_win_max[n] = climate.G_precipitation[n][month];}
+					p_win[n]+=climate.G_precipitation(n,month);
+					if (climate.G_precipitation(n,month) > p_win_max[n]){
+						p_win_max[n] = climate.G_precipitation(n,month);}
 				}
 			}
 			// southern hemisphere
 			else {
 				if (3<month&&month<10){
-					p_win[n]+=climate.G_precipitation[n][month];
-					if (climate.G_precipitation[n][month] > p_win_max[n]){
-						p_win_max[n] = climate.G_precipitation[n][month];}
+					p_win[n]+=climate.G_precipitation(n,month);
+					if (climate.G_precipitation(n,month) > p_win_max[n]){
+						p_win_max[n] = climate.G_precipitation(n,month);}
 				}
 				if ((1<=month&&month<4)||(9<month&&month<=12)){
-					p_som[n]+=climate.G_precipitation[n][month];
-					if (climate.G_precipitation[n][month] > p_som_max[n]){
-						p_som_max[n] = climate.G_precipitation[n][month];}
+					p_som[n]+=climate.G_precipitation(n,month);
+					if (climate.G_precipitation(n,month) > p_som_max[n]){
+						p_som_max[n] = climate.G_precipitation(n,month);}
 				}
 			}
 		}
@@ -201,7 +192,7 @@ void clclClass::calcKoep()
 		else{
 			p_type[n] = 0;    // constant rain
 		}
-	} //end erste for-schleife
+	}
 
 	for (int n = 0; n < ng; ++n) 
 	{
@@ -233,7 +224,7 @@ void clclClass::calcKoep()
 				cerr << "climate characteristic of grid cell " << n << " does not fit in any of the Koeppen classes" << endl;
 			}
 		}
-	} //end basic climate classes
+	}
 
 	// second letters and third koeppen letters:
 	for (int n = 0; n < ng; ++n) 
@@ -263,31 +254,6 @@ void clclClass::calcKoep()
 				cls[n] = 20;} // BW ... desert
 		}
 
-		/****************************************************************
-		//the following is correct but at this point not really necessary...
-
-		// splitting the desert climate BW into hot BWh and cold BWk
-		// BWk = 21 ... cold desert
-		// BWh = 22 ... hot desert
-
-		if (cls[n] == 20 && t_ann[n] < 18.0){
-			cls[n] = 21;}  // BWk = 21 ... cold desert -> finished
-		else if (cls[n] == 20 && t_ann[n] >= 18.0){
-			cls[n] = 22;}  // BWh = 22 ... hot desert -> finished
-
-
-		// splitting the steppe climate BS into hot BSh and cold BSk
-		// BSk = 26 ... cold steppe
-		// BSh = 27 ... hot steppe
-
-		if (cls[n] == 25 && t_ann[n] < 18.0){
-			cls[n] = 26;} // BSk = 26 ... cold steppe -> finished
-		else if (cls[n] == 25 && t_ann[n] >= 18.0){
-			cls[n] = 27;} // BSh = 27 ... hot steppe -> finished
-
-		******************************************************************/
-
-
 		// splitting the tropical climate A based on precipitation amounts
 		// Af = 11 ... tropical wet
 		// Am = 12 ... tropical monsoonal, Af and Am both tropical evergreen rainforest
@@ -310,9 +276,8 @@ void clclClass::calcKoep()
 		 // Cw/Dw = 37/47 ... subtropical/continental with dry winter
 
 		 if (cls[n] == 30 || cls[n] == 40){
-//			if (n<53458){
-//			if (geo.G_row[n] <= nrow_north){   //northern hemisphere
-			if (-(geo.G_row[n] / 2.0 - 90.25) > 0.0) { //wg2
+			if (-(geo.G_row[n] / 2.0 - 90.25) > 0.0) {
+				//wg2
 				// northern hemisphere summer-dry
 				if (p_min_loc[n] >= 4 && p_min_loc[n] <= 9){
 					if (p_min[n] < p_win_max[n]/3.0 && p_min[n] < 40.0){ // summer minimum lower than 1/3 of winter maximum and lower than 40 mm/d
@@ -329,7 +294,8 @@ void clclClass::calcKoep()
 				}
 			}
 
-			else {    // southern hemisphere
+			else {
+				// southern hemisphere
 				// southern hemisphere winter-dry
 				if (p_min_loc[n] >= 4 && p_min_loc[n] <= 9){
 					if (p_min[n] < p_som_max[n]/10.0 ){ // winter minimum lower than 1/10 of southern summer maximum
@@ -362,11 +328,7 @@ void clclClass::calcKoep()
 		 // Dfd,Dsd,Dwd = 51,54,57 ... extrem continental
 
 		 if (cls[n] > 30 && cls[n] < 50){
-			 if (t_max[n] >= 22.0){
-				 //cls[n] == cls[n];
-				 // Nothing to do //SE 2012-05
-			 } // C(fsw)a/D(fsw)a -> finished
-			 else {
+			 if (t_max[n] < 22.0){
 				 if (t_cnt[n] >= 4){
 					 cls[n] = cls[n]+1;} // C(fsw)b/D(fsw)b -> finished
 				 else {
@@ -407,16 +369,14 @@ void clclClass::calcKoep()
 		  if (cls[n] == 148) cls[n] = 50;
 		  if (cls[n] == 149) cls[n] = 51;
 		  if (cls[n] == 157) cls[n] = 52;
-	}// end second and third letters
+	}
 
 	cout << "***** climate classification acc. to Koeppen has been carried out *****" << endl;
-
 }
 
 // assign alpha factor for PT method in PET calculations
 void clclClass::alphaKoep()
 {
-
 	// assign alpha factor for different cls-classes
 	for (int n = 0; n < ng; ++n) {
 		switch (cls[n]){
@@ -479,7 +439,6 @@ void clclClass::alphaKoep()
 	}
 	
 }
-	//end of program climate_classification
 
 
 

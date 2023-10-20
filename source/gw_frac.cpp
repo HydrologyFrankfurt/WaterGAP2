@@ -4,24 +4,22 @@
 *
 ***********************************************************************/
 
-#include <iostream>
+//#include <iostream>
 #include <cstdio>
 #include <cmath>
 
-#include "gridio.h"
+#include "common.h"
 #include "def.h"
-#include "option.h"
-
-#include "gw_frac.h"
+//#include "option.h"
+//#include "gw_frac.h"
+#include "globals.h"
+#include "calib_param.h"
 
 using namespace std;
 
-// #######################################
 // Cell-specific calibration parameters
-// FP
 #include "calib_param.h"
-extern calibParamClass calibParam; // JSON object and methods from watergap.cpp
-// #######################################
+extern calibParamClass calibParam;
 
 inline short round_to_short(const float value)
 {
@@ -35,39 +33,30 @@ groundwaterFactorClass::groundwaterFactorClass()
 }
 
 
-void groundwaterFactorClass::createGrids(const char *input_dir, const char *output_dir)
+void groundwaterFactorClass::createGrids(const std::string inputDirectory, const std::string outputDirectory,calibParamClass &calParam)
 {
-	extern gridioClass gridIO;
 	extern optionClass options;
 
-	char filename[250];
 	int n;
 
 	// SLOPE FACTOR
 
-        //char G_slope_class[ng_land];	// slope class [10-70]
-        char G_slope_class[ng];	// slope class [10-70]
+    Grid<char> G_slope_class;	// slope class [10-70]
+	G_slope_class.read(inputDirectory + "/G_SLOPE_CLASS.UNF1");
 
-	sprintf(filename, "%s/G_SLOPE_CLASS.UNF1", input_dir);
-        //gridIO.readUnfFile(filename, ng_land, G_slope_class);
-        gridIO.readUnfFile(filename, ng, G_slope_class);
 	// file has value 0 if cell is land in IMAGE2.2-landmask
 	// but water in FAO soil map of the world
 	// (data source for slope class)
-        //for (n = 0; n <= ng_land - 1; n++)
-        for (n = 0; n <= ng - 1; n++)
+    for (n = 0; n <= ng - 1; n++)
 		if (0 == G_slope_class[n])
 			G_slope_class[n] = 10;
 
-        //float G_slope_factor[ng_land];
-        float G_slope_factor[ng];
-	short slope_class_table[7]
-	= { 10, 20, 30, 40, 50, 60, 70 };
-	float slope_factor_table[7]
-	= { 1.00, 0.95, 0.90, 0.75, 0.60, 0.30, 0.15 };
-        //for (n = 0; n <= ng_land - 1; n++) {
+    Grid<float> G_slope_factor;
+	short slope_class_table[7] = { 10, 20, 30, 40, 50, 60, 70 };
+	float slope_factor_table[7] = { 1.00, 0.95, 0.90, 0.75, 0.60, 0.30, 0.15 };
+
         for (n = 0; n <= ng - 1; n++) {
-            // FP20161012N001 Enabling treatment of maximum slope class in G_SLOPE_CLASS.UNF1 (currently in file max. 69)
+            // Enabling treatment of maximum slope class in G_SLOPE_CLASS.UNF1 (currently in file max. 69)
             // Maximum class index 6
             if (slope_class_table[6] == G_slope_class[n]) {
               G_slope_factor[n] = slope_factor_table[6];
@@ -92,31 +81,25 @@ void groundwaterFactorClass::createGrids(const char *input_dir, const char *outp
                         // When breaks are not effective, the class boundaries are not respected
                         if (6 == i) {
                                 cout << "ERROR groundwaterFactorClass::createGrids" << endl;
-                                cout << "Class boundaries outside valid range in SLOPE-INPUT-FILE: " << filename << endl;
+                                cout << "Class boundaries outside valid range in SLOPE-INPUT-FILE: " << inputDirectory << "/G_SLOPE_CLASS.UNF1" << endl;
                                 cout << "at n: " << n << ", G_slope_class[n]: " << G_slope_class[n] << endl;
                                 cerr << "ERROR groundwaterFactorClass::createGrids" << endl;
-                                cerr << "Class boundaries outside valid range in SLOPE-INPUT-FILE: " << filename << endl;
+                                cerr << "Class boundaries outside valid range in SLOPE-INPUT-FILE: " << inputDirectory << "/G_SLOPE_CLASS.UNF1" << endl;
                                 cerr << "at n: " << n << ", G_slope_class[n]: " << G_slope_class[n] << endl;
                         }
                 }
-                // end loop over class indices 0 - 5
             }
-            // end else
         }
-        // end loop over grid cells
 
         // Writing G_slope_factor to file
         if (options.outRGmax) {
-            sprintf(filename, "%s/G_SLOPE_FACTOR.UNF0", output_dir);
-            cout << "writing slope factors to file " << filename << endl;
-            gridIO.writeUnfFile(filename, ng, &G_slope_factor[0]);
+            cout << "writing slope factors to file " << outputDirectory << "/G_SLOPE_FACTOR.UNF0" << endl;
+	    G_slope_factor.write(outputDirectory + "/G_SLOPE_FACTOR.UNF0");
         }
 
-    // TEXTURE FACTOR
+	// TEXTURE FACTOR
+	G_texture.read(inputDirectory + "/G_TEXTURE.UNF1");
 
-	sprintf(filename, "%s/G_TEXTURE.UNF1", input_dir);
-        //gridIO.readUnfFile(filename, ng_land, G_texture);
-        gridIO.readUnfFile(filename, ng, G_texture);
 	// values in file:
 	// -2: landcell in IMAGE2.2 landmask but not
 	//     in FAO soil map of the world
@@ -126,26 +109,24 @@ void groundwaterFactorClass::createGrids(const char *input_dir, const char *outp
 	//  2: cells with 100% salt lakes
 	// 10-30: normal range of values
 
-        //float G_texture_factor[ng_land];
-        float G_texture_factor[ng];
-        //float G_Rgmax_f[ng_land];
-        float G_Rgmax_f[ng];
+	Grid<float> G_texture_factor;
+	Grid<float> G_Rgmax_f;
 
 	// as 'float'. will be copied to 'short' array at the end.
 	short texture_table[3] = { 10, 20, 30 };
 	float Rgmax_table[3] = { 5., 3., 1.5 }; // standard value for Rgmax
 	float Rgmax_tableWFD[3] = { 7., 4.5, 2.5 }; // values for WFD daily 
-	if ((0 == options.time_series)|| (2 == options.time_series)){ // when WFD daily input is used, use modified Rgmax (BSc thesis Tögel)
+
+	if (0 == options.time_series){ // when WFD daily input is used, use modified Rgmax (BSc thesis Tögel)
 		for (int i = 0; i < 3; i++)
-		Rgmax_table[i] = Rgmax_tableWFD[i];
+			Rgmax_table[i] = Rgmax_tableWFD[i];
 	}
 	
 	float texture_factor_table[3] = { 1, 0.95, 0.70 };
-	//for (n = 0; n <= ng_land - 1; n++) {
 	for (n = 0; n <= ng - 1; n++) {
 
 		// Efficiency enhancement through local copies instead of often used method getValue // FP
-		double M_RG_MAX__at__n = calibParam.getValue(M_RG_MAX,n);
+		double M_RG_MAX__at__n = calParam.getValue(M_RG_MAX,n);
 
 		if ((G_texture[n] <= 0) || (2 == G_texture[n])) {
 			// for those cases we assume that texture value is 20
@@ -183,37 +164,28 @@ void groundwaterFactorClass::createGrids(const char *input_dir, const char *outp
 					  );
 				break;
 			}
-            // FP20161012N002 Corrected error treatment (value outside class limits) for G_TEXTURE.UNF1
+
+            // Corrected error treatment (value outside class limits) for G_TEXTURE.UNF1
             if (3 == i) {
                 cout << "ERROR groundwaterFactorClass::createGrids" << endl;
-                cout << "Class boundaries outside valid range in TEXTURE-INPUT-FILE: " << filename << endl;
+                cout << "Class boundaries outside valid range in TEXTURE-INPUT-FILE: " << inputDirectory << "/G_TEXTURE.UNF1" << endl;
                 cout << "at n: " << n << ", G_texture[n]: " << G_texture[n] << endl;
                 cerr << "ERROR groundwaterFactorClass::createGrids" << endl;
-                cerr << "Class boundaries outside valid range in TEXTURE-INPUT-FILE: " << filename << endl;
+                cerr << "Class boundaries outside valid range in TEXTURE-INPUT-FILE: " << inputDirectory << "/G_TEXTURE.UNF1" << endl;
                 cerr << "at n: " << n << ", G_texture[n]: " << G_texture[n] << endl;
 			}
 		}
 	}
-	// end loop over grid cells
 
-        //char G_permaglac[ng_land];	// permafrost and glacier [%]
-        char G_permaglac[ng];	// permafrost and glacier [%]
-
-	sprintf(filename, "%s/G_PERMAGLAC.UNF1", input_dir);
-        //gridIO.readUnfFile(filename, ng_land, G_permaglac);
-        gridIO.readUnfFile(filename, ng, G_permaglac);
+    Grid<char> G_permaglac;	// permafrost and glacier [%]
+	G_permaglac.read(inputDirectory + "/G_PERMAGLAC.UNF1");
 	// related factor f_pg is: 1 - (G_permaglac[n]/100.0)
 
-        //char G_aquifer_factor[ng_land];	// aquifer factor [0-100]
-        char G_aquifer_factor[ng];	// aquifer factor [0-100]
-
-	sprintf(filename, "%s/G_AQ_FACTOR.UNF1", input_dir);
-        //gridIO.readUnfFile(filename, ng_land, G_aquifer_factor);
-        gridIO.readUnfFile(filename, ng, G_aquifer_factor);
+    Grid<char> G_aquifer_factor;	// aquifer factor [0-100]
+	G_aquifer_factor.read(inputDirectory + "/G_AQ_FACTOR.UNF1");
 
 	float slopeFactor, textureFactor, aquiferFactor;
 
-	//for (n = 0; n <= ng_land - 1; n++) {
 	for (n = 0; n <= ng - 1; n++) {
 		if (G_texture_factor[n] < 0)
 			G_gwFactor[n] = -99;
@@ -232,17 +204,19 @@ void groundwaterFactorClass::createGrids(const char *input_dir, const char *outp
 				aquiferFactor = 0;
 			if (aquiferFactor > 1)
 				aquiferFactor = 1;
+			G_aquiferFactor[n] = aquiferFactor;
 			if (textureFactor < 0)
 				textureFactor = 0;
 			if (textureFactor > 1)
 				textureFactor = 1;
+			G_textureFactor[n] = textureFactor;
 			if (G_permaFactor[n] < 0)
 				G_permaFactor[n] = 0;
 			if (G_permaFactor[n] > 1)
 				G_permaFactor[n] = 1;
 
 			// Cell-specific calibration parameters - Apply multiplier  // FP
-			G_gwFactor[n] = calibParam.getValue(M_GW_F,n) * slopeFactor * textureFactor * aquiferFactor * G_permaFactor[n];
+			G_gwFactor[n] = calParam.getValue(M_GW_F,n) * slopeFactor * textureFactor * aquiferFactor * G_permaFactor[n];
 
 			// gw factor is set to 0.95 for cells with value > 1
 			if (G_gwFactor[n] > 1.)
@@ -251,64 +225,57 @@ void groundwaterFactorClass::createGrids(const char *input_dir, const char *outp
 
 		}
 	}
-	// end loop over grid cells
 
-	//for (n = 0; n < ng_land; n++) {
 	for (n = 0; n < ng; n++) {
 		if (G_Rgmax_f[n] >= 0)
 			G_Rgmax[n] = round_to_short(G_Rgmax_f[n] * 100);
 		else
 			G_Rgmax[n] = -9999;
 	}
-	// end loop over grid cells
 
-    // CR 2014-07-31: G_GW_FACT_CORR.UNF0 introduced in version WG2.2b (see documentation of WG2.2b)
+    	// G_GW_FACT_CORR.UNF0 introduced in version WG2.2b (see documentation of WG2.2b)
 	// read file G_GW_FACT_CORR.UNF0 including corrected GW_FACTOR in the Mississippi Embayment Regional Aquifer
 	// Mississippi Embayment Regional Aquifer: fg = 0.1, all other cells: fg = -99
-	sprintf(filename, "%s/G_GW_FACTOR_CORR.UNF0", options.input_dir);
-        //gridIO.readUnfFile(filename, ng_land, &G_gwFactorCorr[0]);
-        gridIO.readUnfFile(filename, ng, &G_gwFactorCorr[0]);
+	G_gwFactorCorr.read(string(options.input_dir) + "/G_GW_FACTOR_CORR.UNF0");
 	
 	// write output
-	if (options.outRGmax) { // new output options 2.2
-		sprintf(filename, "%s/G_RG_max.UNF2", output_dir);
-                //gridIO.writeUnfFile(filename, ng_land, G_Rgmax);
-                gridIO.writeUnfFile(filename, ng, G_Rgmax);
+	if (options.outRGmax) {
+		G_Rgmax.write(outputDirectory + "/G_RG_max.UNF2");
+		G_textureFactor.write(outputDirectory + "/G_TEXTURE_FACTOR.UNF0");
+		G_aquiferFactor.write(outputDirectory + "/G_AQUIFER_FACTOR.UNF0");
+		G_permaFactor.write(outputDirectory + "/G_PERMA_FACTOR.UNF0");
 	}
 	
-	if (options.outGWFactor) { // new output options 2.2 (CR 2014-07-31: output file without correction for the Mississippi Embayment Regional Aquifer)
-        sprintf(filename, "%s/G_GW_FACTOR_UNCORR.UNF0", output_dir);
-                //gridIO.writeUnfFile(filename, ng_land, G_gwFactor);
-                gridIO.writeUnfFile(filename, ng, G_gwFactor);
+	if (options.outGWFactor) {
+		// output file without correction for the Mississippi Embayment Regional Aquifer)
+		G_gwFactor.write(outputDirectory + "/G_GW_FACTOR_UNCORR.UNF0");
 	}
 	
-	// CR 2014-07-31: Correction of G_GW_FACTOR in the Mississippi Embayment Regional Aquifer
+	// Correction of G_GW_FACTOR in the Mississippi Embayment Regional Aquifer
 	// G_GW_FACTOR with corrected values is used in daily.cpp
-	//for (n = 0; n <= ng_land - 1; n++) {
 	for (n = 0; n <= ng - 1; n++) {
-		if (G_gwFactorCorr[n] > 0.) {	//all other cells retain the G_gwFactor values computed above
-			// Cell-specific calibration parameters - Apply multiplier  // FP
+		if (G_gwFactorCorr[n] > 0.) {
+
+			//all other cells retain the G_gwFactor values computed above
+			// Cell-specific calibration parameters - Apply multiplier
 			// As the regional correction is considered to be permanent, the multiplier has to be applied also for these values
-			G_gwFactor[n] = calibParam.getValue(M_GW_F,n) * G_gwFactorCorr[n];
+			G_gwFactor[n] = calParam.getValue(M_GW_F,n) * G_gwFactorCorr[n];
 
 			// gw factor is set to 0.95 for cells with value > 1
 			if (G_gwFactor[n] > 1.)
 				G_gwFactor[n] = 0.95;
 		}
 	}
-	// end loop over grid cells
 
-    // write output (G_GW_FACTOR (corrected) is already written in permafrost.cpp)
-    if (options.outGWFactor) { // new output options 2.2 (CR: output file with correction for the Mississippi Embayment Regional Aquifer)
-		sprintf(filename, "%s/G_GW_FACTOR_CORR.UNF0", output_dir);
-                //gridIO.writeUnfFile(filename, ng_land, G_gwFactor);
-                gridIO.writeUnfFile(filename, ng, G_gwFactor);
+    	// write output (G_GW_FACTOR (corrected) is already written in permafrost.cpp)
+    	if (options.outGWFactor) {
+		// output file with correction for the Mississippi Embayment Regional Aquifer
+		G_gwFactor.write(outputDirectory + "/G_GW_FACTOR_CORR.UNF0");
 	}	
 }
 
 void groundwaterFactorClass::setgwFactor(int cell, float value)
 {
-        //if (cell <0||cell>=ng_land) {
         if (cell <0||cell>=ng) {
 		cerr << "groundwaterFactorClass::setgwFactor cell number out of range!\n";
 		exit(-1);
@@ -318,7 +285,6 @@ void groundwaterFactorClass::setgwFactor(int cell, float value)
 
 void groundwaterFactorClass::setRgmax(int cell, short value)
 {
-        //if (cell <0||cell>=ng_land) {
         if (cell <0||cell>=ng) {
 		cerr << "groundwaterFactorClass::setgwFactor cell number out of range!\n";
 		exit(-1);
@@ -328,7 +294,6 @@ void groundwaterFactorClass::setRgmax(int cell, short value)
 
 void groundwaterFactorClass::setpermaFactor(int cell, float value)
 {
-        //if (cell <0||cell>=ng_land) {
         if (cell <0||cell>=ng) {
 		cerr << "groundwaterFactorClass::setpermaFactor cell number outer range!\n";
 		exit(-1);

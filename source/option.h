@@ -7,32 +7,37 @@
 #if !defined (_option_h_)
 #define _option_h_
 #include <fstream>          // MODEL_SETTINGS output
+#include <string>
+#include <vector>
+#include "configFile.h"
+
 using namespace std;        // MODEL_SETTINGS output
 
 class optionClass {
   public:
-	char input_dir[250];
-	char output_dir[250];
-	char climate_dir[250];
-	char routing_dir[250];
-	char water_use_dir[250];
-	char land_cover_dir[250];
-	char *filename_stations;
-	char *filename_singlecells; // HMS 2013-11-21 	
-        char *filename_scout_opt; // HMS 2013-11-21
-	char **cellname;  // HMS 2013-11-21
+	string input_dir;
+	string output_dir;
+	string climate_dir;
+	string glacier_dir;
+	string routing_dir;
+	string water_use_dir;
+	string land_cover_dir;
+
+	string filename_stations;
+	string filename_singlecells;
+    string filename_scout_opt;
+	char **cellname;
 	
-    int *cellnr;  // HMS 2013-11-21  
+    int *cellnr;
 	short start_year;
 	short end_year;
 	short evalStartYear;
 	short init_years;
 	short time_step;
-	short mid_year;
 	short landCoverYearsInList; // vor variable land cover map : number of maps
-	short *landCoverYears;      // vor variable land cover map : list of years with map
-	short *landCoverYearsStart; // vor variable land cover map : begin of period with one map
-	short *landCoverYearsEnd;   // vor variable land cover map : end of period with one map
+	vector<short> landCoverYears;      // vor variable land cover map : list of years with map
+	vector<short> landCoverYearsStart; // vor variable land cover map : begin of period with one map
+	vector<short> landCoverYearsEnd;   // vor variable land cover map : end of period with one map
 
 	short fileEndianType;
 	short basin;
@@ -41,8 +46,6 @@ class optionClass {
 	short day_store;
 	short time_series;
 	short cloud;
-	short raindays;
-	short prec_correct;
 	short intercept;
 	short calc_albedo;
 	short use_kc;
@@ -58,18 +61,16 @@ class optionClass {
 	short permaOpt;
     short resOpt;
     short statcorrOpt;
-    short numberOfSingleCells; // HMS 2013-11-21
+    short numberOfSingleCells;
     short aridareaOpt;
     short fractionalRoutingOpt;
 	short riverEvapoOpt;
 	short aggrNUsGloLakResOpt;
-	short gammaHBV_CorrOpt;
 
-    // FP20161018N003 Enable reading input data from climate land mask
+    // reading input data from climate land mask
     // Extended grids for climate land mask (union of Standard/SLM and WATCH CRU Land Mask/WLM)
     short climate_spatial_resolution;
 
-    // FP20161018N002 Reservoir operation start years
     // Treat anthropogenic vs. naturalized runs
     short antNatOpt;
     // Settings for how to consider reservoir and regulated lakes
@@ -77,11 +78,16 @@ class optionClass {
     short resYearReference;
     short resYearFirstToUse;
     short resYearLastToUse;
-    // FP20161018N004 Net use / net abstraction for reservoir algorithm: new filename
+
+    // Settings for water temperature calculation
+    short calc_wtemp;
+
+    // Net use / net abstraction for reservoir algorithm: new filename
     // Code for reference period G_NUs_yrfirst4digits_yrlast4digits.UNF, e.g. G_NUs_1971_2000.UNF
     // Now: name with averaging period of full year start and end (obsolete: (YearStart 2 digits + YearEnd 2 digits)
     short resNUsMeanYearFirst;
     short resNUsMeanYearLast;
+	short glacierOpt;
 
     // options from ISISMIP2.2 to integrate/change
     bool outCellAETActualUse; // postprocessing
@@ -89,9 +95,7 @@ class optionClass {
     bool outLandStorageChange; // delete
     bool outResCapacity; //new
     bool outRunoffDaily;                             //6
-// = outSurfaceRunoff + outGWRunoff;
     bool outAETDaily;
-    //= outAET
 
 	// bool variables for output options
 	// monthly binary files
@@ -157,148 +161,164 @@ class optionClass {
         bool outLocWetlExt;                         //59
         bool outGloWetlExt;                         //60
         bool outTotalGWR;                           //61
+        bool outGwrunSurfrun;   					//62
+		bool outGlacArea;                           //63
+        bool outGlacAreaFrac;                       //64
+        bool outGlacPrecip;                         //65
+        bool outGlacRunoff;                         //66
+        bool outGlacierStorage;                     //67
 
         // daily binary files
-        bool outPrecDaily;                          //62
-        bool outCellAETDaily;                       //63
-        bool outCellRunoffDaily;                    //64
-        bool outCellSurfaceDaily;                   //65
-        bool outSurfaceRunoffDaily;                 //66
-        bool outGWRunoffDaily;                      //67
-        bool outGWRechargeDaily;                    //68
-        bool outGWStorageDaily;                     //69
-        bool outSoilWaterDaily;                     //70
-        bool outLAIDaily;                           //71
-        bool outAlbedoDaily;                        //72
-        bool outInterceptionDaily;                  //73
-        bool outCanopyWaterDaily;                   //74
-        bool outmaxCanopyWaterDaily;                //75
-        bool outExtRadiationDaily;                  //76
-        bool outShortDownRadiationDaily;            //77
-        bool outShortUpRadiationDaily;              //78
-        bool outNetShortWaveRadiationDaily;         //79
-        bool outLongDownRadiationDaily;             //80
-        bool outLongUpRadiationDaily;               //81
-        bool outNetLongWaveRadiationDaily;          //82
-        bool outNetRadiationDaily;                  //83
-        bool outPETDaily;                           //84
-        bool outTotalPETDaily;                      //85
-        bool outRiverAvailDaily;                    //86
-        bool outRiverVeloDaily;                     //87
-        bool outSnowCoverDaily;                     //88
-        bool outSWEDaily;                           //89
-        bool outSnowFallDaily;                      //90
-        bool outSnowMeltDaily;                      //91
-        bool outSurfStorDaily;                      //92
-    bool outSingleStoragesDaily;                    //93
-    bool outTotalWaterInStoragesDaily_km3;          //94
-    bool outTotalWaterInStoragesDaily_mm;           //95
-    bool outTotalWaterInStoragesStartEndDaily_km3;   //96
-        bool outGwrSwbDaily;                        //97
-        bool outFswbDaily;                          //98
-        bool outLandAreaFracDaily;                  //99
-        bool outGwrunSurfrunDaily;                  //100
-        bool outCellAETWCaDaily;                         //101
+        bool outPrecDaily;                          //68
+        bool outCellAETDaily;                       //69
+        bool outCellRunoffDaily;                    //70
+        bool outCellSurfaceDaily;                   //71
+        bool outSurfaceRunoffDaily;                 //72
+        bool outGWRunoffDaily;                      //73
+        bool outGWRechargeDaily;                    //74
+        bool outGWStorageDaily;                     //75
+        bool outSoilWaterDaily;                     //76
+        bool outLAIDaily;                           //77
+        bool outAlbedoDaily;                        //78
+        bool outInterceptionDaily;                  //79
+        bool outCanopyWaterDaily;                   //80
+        bool outmaxCanopyWaterDaily;                //81
+        bool outExtRadiationDaily;                  //82
+        bool outShortDownRadiationDaily;            //83
+        bool outShortUpRadiationDaily;              //84
+        bool outNetShortWaveRadiationDaily;         //85
+        bool outLongDownRadiationDaily;             //86
+        bool outLongUpRadiationDaily;               //87
+        bool outNetLongWaveRadiationDaily;          //88
+        bool outNetRadiationDaily;                  //89
+        bool outPETDaily;                           //90
+        bool outTotalPETDaily;                      //91
+        bool outRiverAvailDaily;                    //92
+        bool outRiverVeloDaily;                     //93
+        bool outSnowCoverDaily;                     //94
+        bool outSWEDaily;                           //95
+        bool outSnowFallDaily;                      //96
+        bool outSnowMeltDaily;                      //97
+        bool outSurfStorDaily;                      //98
+    bool outSingleStoragesDaily;                    //99
+    bool outTotalWaterInStoragesDaily_km3;          //100
+    bool outTotalWaterInStoragesDaily_mm;           //101
+    bool outTotalWaterInStoragesStartEndDaily_km3;   //102
+        bool outGwrSwbDaily;                        //103
+        bool outFswbDaily;                          //104
+        bool outLandAreaFracDaily;                  //105
+        bool outGwrunSurfrunDaily;                  //106
+        bool outCellAETWCaDaily;                    //107
+        bool outGlacierStorageDaily;				//108
+        bool outGlacierStorageDaily_mm;             //109
+        bool outRedTemp;                            //110
+        bool outTemp;                               //111
 
         // additional binary files
-        bool outGWFactor;                           //102
-        bool outRGmax;                              //103
-        bool outmaxSoilWater;                       //104
-        bool outRootingDepth;                       //105
-        bool outClcl;                               //106
-        bool outLAImax;                             //107
-        bool outAirFrost;                           //108
-        bool outSurfaceFrost;                       //109
-        bool outRH;                                 //110
+        bool outGWFactor;                           //112
+        bool outRGmax;                              //113
+        bool outmaxSoilWater;                       //114
+        bool outRootingDepth;                       //115
+        bool outClcl;                               //116
+        bool outLAImax;                             //117
+        bool outAirFrost;                           //118
+        bool outSurfaceFrost;                       //119
+        bool outRH;                                 //120
 
 	// ASCII files
-        bool outAllUpStations;                      //111
-        bool outDirectUpStations;                   //112
-        bool outRainDays;                           //113
-        bool outStationDischargeAnnual;             //114
-        bool outStationDischargeMonthly;            //115
-        bool outStationList; 		// not implemented yet!!116
-        bool outSuperbasinClimate;                  //117
-        bool outResvoirMonthly;                     //118
+        bool outAllUpStations;                      //121
+        bool outDirectUpStations;                   //122
+        bool outRainDays;                           //123
+        bool outStationDischargeAnnual;             //124
+        bool outStationDischargeMonthly;            //125
+        bool outStationList; 		// not implemented yet!!126
+        bool outSuperbasinClimate;                  //127
+        bool outResvoirMonthly;                     //128
 
         // additional ASCII files (option: save daily values)
-        bool outDailyValues;                        //119
-        bool outDailyInterception;                  //120
-        bool outStationDischargeDaily;              //121
-        bool outStationVelocityDaily;               //122
-        bool outLocLakeStorageDaily;                //123
-        bool outGloLakeStorageDaily;                //124
-        bool outLocWetlStorageDaily;                //125
-        bool outGloWetlStorageDaily;                //126
-        bool outResStorageDaily;                    //127
+        bool outDailyValues;                        //129
+        bool outDailyInterception;                  //130
+        bool outStationDischargeDaily;              //131
+        bool outStationVelocityDaily;               //132
+        bool outLocLakeStorageDaily;                //133
+        bool outGloLakeStorageDaily;                //134
+        bool outLocWetlStorageDaily;                //135
+        bool outGloWetlStorageDaily;                //136
+        bool outResStorageDaily;                    //137
 
 
-// single cell output options
-        bool scoutTemp;             //sc0
-        bool scoutExtRad;           //sc1
-        bool scoutShortDownRad;     //sc2
-        bool scoutAlbedo;           //sc3
-        bool scoutShortUpRad;       //sc4
-        bool scoutNetShortRad;      //sc5
-        bool scoutLongDownRad;      //sc6
-        bool scoutLongUpRad;        //sc7
-        bool scoutNetLongRad;       //sc8
-        bool scoutNetRad;           //sc9
-        bool scoutLAI;              //sc10
-        bool scoutKc;               //sc11
-        bool scoutLandPET;          //sc12
-        bool scoutCellPET;          //sc13
-        bool scoutPrecip;           //sc14
-        bool scoutcPrecip;          //sc15
-        bool scoutCanopyWater;      //sc16
-        bool scoutmaxCanopyWater;   //sc17
-        bool scoutInterception;     //sc18
-        bool scoutSnowfall;         //sc19
-        bool scoutSnowWater;        //sc20
-        bool scoutSnowCov;          //sc21
-        bool scoutSnowmelt;         //sc22
-        bool scoutSoilWater;        //sc23
-        bool scoutSurfaceRunoff;    //sc24
-        bool scoutGwRunoff;         //sc25
-        bool scoutGwRecharge;       //sc26
-        bool scoutCellAET;          //sc27
-        bool scoutCellRunoffkm3;    //sc28
-        bool scoutCellRunoffmm;     //sc29
-        bool scoutCellSRunoff;      //sc30
-        bool scoutQ;                //sc31
-        bool scoutFlowVelo;         //sc32
-        bool scoutLocLake;          //sc33
-        bool scoutLocWet;           //sc34
-        bool scoutGloLake;          //sc35
-        bool scoutReservoir;        //sc36
-        bool scoutGloWet;           //sc37
-        bool scoutRiver;            //sc38
-        bool scoutSurfaceStor;      //sc39
-        bool scoutTWSkm3;           //sc40
-        bool scoutTWSmm;            //sc41
-        bool scoutGwStor;           //sc42
-        bool scoutCanopyStor;       //sc43
-        bool scoutSnowStor;         //sc44
-        bool scoutSoilStor;         //sc45
-        bool scoutGwrSwb;           //sc46
-        bool scoutFswb;             //sc47
-        bool scoutLandAreaFrac;     //sc48
+    // single cell output options
+    bool scoutTemp;             //sc0
+    bool scoutExtRad;           //sc1
+    bool scoutShortDownRad;     //sc2
+    bool scoutAlbedo;           //sc3
+    bool scoutShortUpRad;       //sc4
+    bool scoutNetShortRad;      //sc5
+    bool scoutLongDownRad;      //sc6
+    bool scoutLongUpRad;        //sc7
+    bool scoutNetLongRad;       //sc8
+    bool scoutNetRad;           //sc9
+    bool scoutLAI;              //sc10
+    bool scoutKc;               //sc11
+    bool scoutLandPET;          //sc12
+    bool scoutCellPET;          //sc13
+    bool scoutPrecip;           //sc14
+    bool scoutcPrecip;          //sc15
+    bool scoutCanopyWater;      //sc16
+    bool scoutmaxCanopyWater;   //sc17
+    bool scoutInterception;     //sc18
+    bool scoutSnowfall;         //sc19
+    bool scoutSnowWater;        //sc20
+    bool scoutSnowCov;          //sc21
+    bool scoutSnowmelt;         //sc22
+    bool scoutSoilWater;        //sc23
+    bool scoutSurfaceRunoff;    //sc24
+    bool scoutGwRunoff;         //sc25
+    bool scoutGwRecharge;       //sc26
+    bool scoutCellAET;          //sc27
+    bool scoutCellRunoffkm3;    //sc28
+    bool scoutCellRunoffmm;     //sc29
+    bool scoutCellSRunoff;      //sc30
+    bool scoutQ;                //sc31
+    bool scoutFlowVelo;         //sc32
+    bool scoutLocLake;          //sc33
+    bool scoutLocWet;           //sc34
+    bool scoutGloLake;          //sc35
+    bool scoutReservoir;        //sc36
+    bool scoutGloWet;           //sc37
+    bool scoutRiver;            //sc38
+    bool scoutSurfaceStor;      //sc39
+    bool scoutTWSkm3;           //sc40
+    bool scoutTWSmm;            //sc41
+    bool scoutGwStor;           //sc42
+    bool scoutCanopyStor;       //sc43
+    bool scoutSnowStor;         //sc44
+    bool scoutSoilStor;         //sc45
+    bool scoutGwrSwb;           //sc46
+    bool scoutFswb;             //sc47
+    bool scoutLandAreaFrac;     //sc48
 
-	void init(int optionc, char* optionv[]);
+    // output options for water temperature
+    bool outWaterTempDaily;			 //138
+    bool outWaterTempMonthly;        //139
+    bool outWaterTempDailyAllSWB;    //140
+    bool outWaterTempMonthlyAllSWB;	 //141
+
+    void init(ConfigFile configFile);
 
 	~optionClass();
 	
-    void createModelSettingsFile(const char *outputDir);     // MODEL_SETTINGS output
+    void createModelSettingsFile(const string outputDir);     // MODEL_SETTINGS output
     void closeModelSettingsFile();                          // MODEL_SETTINGS output
-    short createSingleCellFileList(const char *inputDir, const char *outputDir); // HMS 2013-11-21 single cell output
+    short createSingleCellFileList(const string inputDir, const string outputDir); // HMS 2013-11-21 single cell output
 	
   private:
 
-	char *filename_data;
-	char *filename_time;
-	char *filename_opt;
-	char *filename_out_opt;
+	string filename_data;
+	string filename_time;
+	string filename_opt;
+	string filename_out_opt;
 
-  ofstream modelSettingsFile;    // MODEL_SETTINGS output
+    ofstream modelSettingsFile;    // MODEL_SETTINGS output
 };
 #endif

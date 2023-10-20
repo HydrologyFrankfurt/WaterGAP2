@@ -1,22 +1,23 @@
-
+#if !defined (_s_max_h_)
+#define _s_max_h_
 /***********************************************************************
 *
 * see former changes at file s_max.h.versioninfos.txt
 *
 ***********************************************************************/
 #include "def.h"
+#include "grid.h"
+#include <string>
 
 class soilWatCapClass {
   public:
-	soilWatCapClass(void);
-	float G_Smax[ng];	// total available soil water capacity
-	void createMaxSoilWaterCapacityGrid(char *input_dir, char *output_dir, char *G_land_cover);
-    void setParameters();
-
+		soilWatCapClass(void);
+		Grid<float> G_Smax;	// total available soil water capacity
+		void createMaxSoilWaterCapacityGrid(std::string input_dir, std::string output_dir, Grid<char> G_land_cover,calibParamClass calParam);//OE: calParam added);
+		void setParameters();
 
   private:
     float rootingDepth[nlct];
-	bool parameterFlag;
-  	// variables which is read from 'LCT_22.DAT' now in dailyWaterBalanceClass as rootingDepth_lct
-	// float rootingDepth[nlct];
+		bool parameterFlag;
 };
+#endif

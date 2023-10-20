@@ -1,9 +1,3 @@
-
-/***********************************************************************
-*
-* see former changes at file calib_basins.cpp.versioninfos.txt
-***********************************************************************/
-
 #include <iostream>
 #include <iomanip>
 #include <fstream>
@@ -11,50 +5,44 @@
 #include <cstring>
 #include <cstdlib>
 
-#include "gridio.h"
+#include "common.h"
 #include "geo.h"
 #include "timestring.h"
 #include "def.h"
 #include "stack.h"
-#include "calib_basins.h"
-#include "option.h"
+#include "globals.h"
 
 using namespace std;
 
-extern gridioClass gridIO;
 extern geoClass geo;
 
 
 short upstreamBasin(const int CellNumber,
 					const signed short basinNumber,
-					const int G_inflow_cells[ng][9],
-					signed short *G_calib_basin, char *overlapBasinNumString);
+					const VariableChannelGrid<9,int> G_inflow_cells,
+					Grid<signed short> & G_calib_basin, char *overlapBasinNumString);
 
-short cbasinClass::prepare(char *input_dir, char *output_dir, char *routing_dir)
+short cbasinClass::prepare(const string input_dir, const string output_dir, const string routing_dir)
 {
-	extern optionClass options;
+	//extern optionClass options;
 	char filename[250];
 
 	// if streams are used instead of 'sprintf'
 	// this should look like this:
 	//
-	//#include <strstream.h>
+	// #include <strstream.h>
 	// ...
-	//ostrstream fname;
-	//fname << input_dir << "/GCRC.UNF4" << ends;;
-	//filename = fname.str();
+	// ostrstream fname;
+	// fname << input_dir << "/GCRC.UNF4" << ends;;
+	// filename = fname.str();
 
-	int G_inflow_cells[ng][9];
+	VariableChannelGrid<9,int> G_inflow_cells;
+	G_inflow_cells.read(routing_dir + "/G_INFLC.9.UNF4");
 
-	sprintf(filename, "%s/G_INFLC.9.UNF4", routing_dir);
-	gridIO.readUnfFile(filename, 9 * ng, &G_inflow_cells[0][0]);
+	Grid<signed short> G_calib_basin;
+	G_calib_basin.fill(0);
 
-	signed short G_calib_basin[ng];
 	int n;
-
-	for (n = 0; n <= (ng - 1); n++)
-		G_calib_basin[n] = 0;
-
 
 	// open file which contains location of stations
 	ifstream station_file(options.filename_stations);
@@ -64,7 +52,7 @@ short cbasinClass::prepare(char *input_dir, char *output_dir, char *routing_dir)
 		exit(-1);
 	}
 	// open file for output
-	sprintf(filename, "%s/STATION_LIST.OUT", output_dir);
+	sprintf(filename, "%s/STATION_LIST.OUT", output_dir.c_str());
 	ofstream output_file(filename);
 
 	if (!output_file) {
@@ -73,7 +61,7 @@ short cbasinClass::prepare(char *input_dir, char *output_dir, char *routing_dir)
 	}
 	output_file << "# " << getTimeString();
 
-	signed short G_short[ng];
+	Grid<signed short> G_short;
 	short overlap, cellAlreadyInList;
 	char overlapBasinNumString[250];
 	float longitude, latitude;
@@ -215,38 +203,42 @@ short cbasinClass::prepare(char *input_dir, char *output_dir, char *routing_dir)
 	// allocate memory for arrays and
 	// copy contents of stacks into them
 	int i;
-	cellNum = new int[stackCellNum.getNumberOfElements()];
+	cellNum.clear();
+	cellNum.resize(stackCellNum.getNumberOfElements());
 
 	for (i = stackCellNum.getNumberOfElements(); i >= 1; i--)
 		if (stackCellNum.pop(cn))
 			cellNum[i - 1] = cn;
 
-	gamma = new float[stackGamma.getNumberOfElements()];
+	gamma.clear();
+	gamma.resize(stackGamma.getNumberOfElements());
 
 	for (i = stackGamma.getNumberOfElements(); i >= 1; i--)
 		if (stackGamma.pop(gamma2))
 			gamma[i - 1] = gamma2;
 
-	cellCorrFactor = new float[stackCellCorrFact.getNumberOfElements()];
+	cellCorrFactor.clear();
+	cellCorrFactor.resize(stackCellCorrFact.getNumberOfElements());
 
 	for (i = stackCellCorrFact.getNumberOfElements(); i >= 1; i--)
 		if (stackCellCorrFact.pop(cellCorrFact2))
 			cellCorrFactor[i - 1] = cellCorrFact2;
 
-	statCorrFactor = new float[stackStatCorrFact.getNumberOfElements()];
+	statCorrFactor.clear();
+	statCorrFactor.resize(stackStatCorrFact.getNumberOfElements());
 
 	for (i = stackStatCorrFact.getNumberOfElements(); i >= 1; i--)
 		if (stackStatCorrFact.pop(statCorrFact2))
 			statCorrFactor[i - 1] = statCorrFact2;
 
-	float *upstreamArea;
-	upstreamArea = new float[stackUpArea.getNumberOfElements()];
+	std::vector<float> upstreamArea(stackUpArea.getNumberOfElements());
 
 	for (i = stackUpArea.getNumberOfElements(); i >= 1; i--)
 		if (stackUpArea.pop(upArea))
 			upstreamArea[i - 1] = upArea;
 
-	name = new char *[stackNamePointer.getNumberOfElements()];
+	name.clear();
+	name.resize(stackNamePointer.getNumberOfElements());
 
 	for (i = stackNamePointer.getNumberOfElements(); i >= 1; i--)
 		if (stackNamePointer.pop(basinName))
@@ -254,14 +246,15 @@ short cbasinClass::prepare(char *input_dir, char *output_dir, char *routing_dir)
 
 
 	// calculate area of calibration areas
-	calibArea = new float[numberOfCalibBasins];
-	calibLandArea = new float[numberOfCalibBasins];
+	calibArea.clear();
+	calibArea.resize(numberOfCalibBasins);
+
+	calibLandArea.clear();
+	calibLandArea.resize(numberOfCalibBasins);
 
 	for (n = 1; n <= numberOfCalibBasins; n++) {
-		calibArea[n - 1]
-			= geo.nonOceanAreaOfObjectInGrid((short) n, G_calib_basin, ng);
-		calibLandArea[n - 1]
-			= geo.landAreaOfObjectInGrid((short) n, G_calib_basin, ng);
+		calibArea[n - 1] = geo.nonOceanAreaOfObjectInGrid((short) n, G_calib_basin, ng);
+		calibLandArea[n - 1] = geo.landAreaOfObjectInGrid((short) n, G_calib_basin, ng);
 	}
 
 	// write the results into a file
@@ -283,11 +276,11 @@ short cbasinClass::prepare(char *input_dir, char *output_dir, char *routing_dir)
 	// also be calculated.
 	// all of them get a value of -1 if they do not already have a value 
 	// different from zero.
-	int G_outflow_cell[ng];
+	Grid<int> G_outflow_cell;
+	G_outflow_cell.read(routing_dir + "/G_OUTFLC.UNF4");
+
 	int outflow_cell;
 
-	sprintf(filename, "%s/G_OUTFLC.UNF4", routing_dir);
-	gridIO.readUnfFile(filename, ng, G_outflow_cell);
 	for (n = 0; n <= numberOfCalibBasins - 1; n++) {
 		outflow_cell = G_outflow_cell[cellNum[n] - 1];
 		if (outflow_cell != 0)
@@ -295,19 +288,14 @@ short cbasinClass::prepare(char *input_dir, char *output_dir, char *routing_dir)
 				G_calib_basin[outflow_cell - 1] = -1;
 	}
 
-	sprintf(filename, "%s/G_CALIB_BASIN.UNF2", output_dir);
-	gridIO.writeUnfFile(filename, ng, G_calib_basin);
-
-	delete upstreamArea;
+	G_calib_basin.write(output_dir + "/G_CALIB_BASIN.UNF2");
 
 	return numberOfCalibBasins;
 }
 
-
-short upstreamBasin(const int CellNumber,
-					const signed short basinNumber,
-					const int G_inflow_cells[ng][9],
-					signed short *G_calib_basin, char *overlapBasinNumString)
+short upstreamBasin(const int CellNumber, const signed short basinNumber,
+					const VariableChannelGrid<9,int> G_inflow_cells,
+					Grid<signed short> & G_calib_basin, char *overlapBasinNumString)
 {
 	short not_yet_ready, base_value = 0;
 	short upstream = 0, downstream = 0;
@@ -334,13 +322,13 @@ short upstreamBasin(const int CellNumber,
 				for (short j = 0; j <= 8; ++j) {
 					G_calib_basin[n] = -2;
 					// cell does not need to be considered any more
-					if (G_inflow_cells[n][j] != 0) {
-						if (base_value == G_calib_basin[G_inflow_cells[n][j] - 1]) {
+					if (G_inflow_cells(n,j) != 0) {
+						if (base_value == G_calib_basin[G_inflow_cells(n,j) - 1]) {
 							// cell is not already part of another calibration basin
 							// or the calibration basin is already recognized
 							// because it is 'downstream' (see above)
 							not_yet_ready = 1;
-							G_calib_basin[G_inflow_cells[n][j] - 1] = -1;
+							G_calib_basin[G_inflow_cells(n,j) - 1] = -1;
 						} else {
 							// cell already has a value 
 							//if (1 == upstream) 
@@ -350,10 +338,10 @@ short upstreamBasin(const int CellNumber,
 								// for the 'downstream' case (see above)    
 #ifdef debug
 								cout << "Previously defined basin "
-									<< (int) G_calib_basin[G_inflow_cells[n][j] - 1]
+									<< (int) G_calib_basin[G_inflow_cells(n,j) - 1]
 									<< " is upstream to basin " << (int) basinNumber << endl;
 #endif
-								sprintf(string, "%d ", G_calib_basin[G_inflow_cells[n][j] - 1]);
+								sprintf(string, "%d ", G_calib_basin[G_inflow_cells(n,j) - 1]);
 								strcat(overlapBasinNumString, string);
 								downstream = 2;	// downstream basin exists
 							}

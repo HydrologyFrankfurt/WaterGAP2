@@ -100,12 +100,12 @@ void routingClass::check_LT0__annualInit() {
         check_array2Dng12_double_LT0(G_monthlyConsistentPrecip);
         check_array2Dng12_double_LT0(G_monthlyRiverAvail);
             // may be negative = exclude
-            // G_monthlyCellSurfaceRunoff[n][m];
+            // G_monthlyCellSurfaceRunoff(n,m);
         check_array2Dng12_double_LT0(G_monthlyOpenWaterEvap);
         check_array2Dng12_double_LT0(G_monthlyVelocity);
             // may be negative = exclude
-            // G_monthlySurfStor[n][m];
-            // G_monthlySurfStor_mm[n][m];
+            // G_monthlySurfStor(n,m);
+            // G_monthlySurfStor_mm(n,m);
         check_array2Dng12_double_LT0(G_monthlyMinRiverAvail);
         check_array2Dng12_double_LT0(G_monthlyMaxRiverAvail);
         check_array2Dng12_double_LT0(G_monthlyGwrSwb);
@@ -113,10 +113,10 @@ void routingClass::check_LT0__annualInit() {
         check_array2Dng12_double_LT0(G_monthlyFswb);
         check_array2Dng12_double_LT0(G_monthlyGwRunoff);
             // may be negative = exclude
-            // G_monthlyPotCellRunoff[n][m];
-            // G_monthlyPotCellRunoffDeficit[n][m];
-            // G_monthlyCellRunoff[n][m];
-            // G_monthlyCellAET[n][m];
+            // G_monthlyPotCellRunoff(n,m);
+            // G_monthlyPotCellRunoffDeficit(n,m);
+            // G_monthlyCellRunoff(n,m);
+            // G_monthlyCellAET(n,m);
 
         if (options.outRiverPET == 1) {
             check_array2Dng12_double_LT0(G_monthlyRiverAreaFrac);
@@ -136,15 +136,15 @@ void routingClass::check_LT0__annualInit() {
 
         check_array2Dng12_double_LT0(G_monthlyRiverStorage);
             // may be negative = exclude
-            //G_monthlyGwStorage[n][m];
-            //G_monthlyLocLakeStorage[n][m];
-            //G_monthlyGloLakeStorage[n][m];
+            //G_monthlyGwStorage(n,m);
+            //G_monthlyLocLakeStorage(n,m);
+            //G_monthlyGloLakeStorage(n,m);
         check_array2Dng12_double_LT0(G_monthlyLocWetlStorage);
         check_array2Dng12_double_LT0(G_monthlyGloWetlStorage);
 
             // may be negative = exclude
-            // G_monthlySatisfiedUse[n][m];
-            // G_monthlyActualUse[n][m];
+            // G_monthlySatisfiedUse(n,m);
+            // G_monthlyActualUse(n,m);
 
     }
     // endif options
@@ -159,34 +159,40 @@ void routingClass::check_NaN__annualInit() {
 
         check_array_double_NaN(G_UnsatisfiedUsePrevYear, ng);
         check_array_double_NaN(G_totalUnsatisfiedUse, ng);
-            // may be negative 3x
-            check_array_double_NaN(G_satisfiedUse, ng);
-            check_array_double_NaN(G_actualUse, ng);
-            check_array_double_NaN(G_potCellRunoff, ng);
+
+        // may be negative 3x
+        check_array_double_NaN(G_satisfiedUse, ng);
+        check_array_double_NaN(G_actualUse, ng);
+        check_array_double_NaN(G_potCellRunoff, ng);
 
 
     if ((2 == options.grid_store) || (4 == options.grid_store) || (6 == options.grid_store)) {
 
         check_array2Dng12_double_NaN(G_monthlyConsistentPrecip);
         check_array2Dng12_double_NaN(G_monthlyRiverAvail);
-            // may be negative 1x
-            check_array2Dng12_double_NaN(G_monthlyCellSurfaceRunoff);
+
+        // may be negative 1x
+        check_array2Dng12_double_NaN(G_monthlyCellSurfaceRunoff);
+
         check_array2Dng12_double_NaN(G_monthlyOpenWaterEvap);
         check_array2Dng12_double_NaN(G_monthlyVelocity);
-            // may be negative 2x
-            check_array2Dng12_double_NaN(G_monthlySurfStor);
-            check_array2Dng12_double_NaN(G_monthlySurfStor_mm);
+
+        // may be negative 2x
+        check_array2Dng12_double_NaN(G_monthlySurfStor);
+        check_array2Dng12_double_NaN(G_monthlySurfStor_mm);
+
         check_array2Dng12_double_NaN(G_monthlyMinRiverAvail);
         check_array2Dng12_double_NaN(G_monthlyMaxRiverAvail);
         check_array2Dng12_double_NaN(G_monthlyGwrSwb);
         check_array2Dng12_double_NaN(G_monthlyLandAreaFrac);
         check_array2Dng12_double_NaN(G_monthlyFswb);
         check_array2Dng12_double_NaN(G_monthlyGwRunoff);
-            // may be negative 4x
-            check_array2Dng12_double_NaN(G_monthlyPotCellRunoff);
-            check_array2Dng12_double_NaN(G_monthlyPotCellRunoffDeficit);
-            check_array2Dng12_double_NaN(G_monthlyCellRunoff);
-            check_array2Dng12_double_NaN(G_monthlyCellAET);
+
+        // may be negative 4x
+        check_array2Dng12_double_NaN(G_monthlyPotCellRunoff);
+        check_array2Dng12_double_NaN(G_monthlyPotCellRunoffDeficit);
+        check_array2Dng12_double_NaN(G_monthlyCellRunoff);
+        check_array2Dng12_double_NaN(G_monthlyCellAET);
 
         if (options.outRiverPET == 1) {
             check_array2Dng12_double_NaN(G_monthlyRiverAreaFrac);
@@ -205,10 +211,11 @@ void routingClass::check_NaN__annualInit() {
         }
 
         check_array2Dng12_double_NaN(G_monthlyRiverStorage);
-            // may be negative 3x
-            check_array2Dng12_double_NaN(G_monthlyGwStorage);
-            check_array2Dng12_double_NaN(G_monthlyLocLakeStorage);
-            check_array2Dng12_double_NaN(G_monthlyGloLakeStorage);
+
+        // may be negative 3x
+        check_array2Dng12_double_NaN(G_monthlyGwStorage);
+        check_array2Dng12_double_NaN(G_monthlyLocLakeStorage);
+        check_array2Dng12_double_NaN(G_monthlyGloLakeStorage);
 
         check_array2Dng12_double_NaN(G_monthlyLocWetlStorage);
         check_array2Dng12_double_NaN(G_monthlyGloWetlStorage);
@@ -216,10 +223,7 @@ void routingClass::check_NaN__annualInit() {
         check_array2Dng12_double_NaN(G_monthlyActualUse);
 
     }
-    // endif options
-
 }
-// end check_NaN__annualInit
 
 
 //
@@ -235,9 +239,7 @@ void routingClass::list_LT0__365TWS() {
             list_array2Dng365_double_LT0__strgmsg(G_daily365TotalWaterInStorages_mm, s_temp);
         }
     }
-    //endif options
 }
-// end list_LT0__365TWS
 
 void routingClass::list_NaN__365TWS() {
     cout << "list_NaN__365TWS() started" << endl;
@@ -249,23 +251,19 @@ void routingClass::list_NaN__365TWS() {
             list_array2Dng365_double_NaN__strgmsg(G_daily365TotalWaterInStorages_mm, s_temp);
         }
     }
-    //endif options
 }
-// end list_NaN__365TWS
 
 void routingClass::list_LT0__365AET() {
     cout << "list_LT0__365AET() started" << endl;
     string s_temp = string("G_daily365CellAET");
     list_array2Dng365_double_LT0__strgmsg(G_daily365CellAET, s_temp);
 }
-// end list_LT0__365AET
 
 void routingClass::list_NaN__365AET() {
     cout << "list_NaN__365AET() started" << endl;
     string s_temp = string("G_daily365CellAET");
     list_array2Dng365_double_NaN__strgmsg(G_daily365CellAET, s_temp);
 }
-// end list_NaN__365AET
 
 
 // List negative values of monthly output grids (selected variables from annualInit)
@@ -286,19 +284,8 @@ void routingClass::list_LT0__annualInit() {
         // (a small number of cells with negative values expected)
         s_temp = string("G_monthlyCellAET");
         list_array2Dng12_double_LT0__strgmsg(G_monthlyCellAET, s_temp);
-
-            // may be negative = exclude
-            // s_temp = string("G_monthlyPotCellRunoff");
-            // list_array2Dng12_double_LT0__strgmsg(G_monthlyPotCellRunoff, s_temp);
-            // s_temp = string("G_monthlyPotCellRunoffDeficit");
-            // list_array2Dng12_double_LT0__strgmsg(G_monthlyPotCellRunoffDeficit, s_temp);
-            // s_temp = string("G_monthlyCellRunoff");
-            // list_array2Dng12_double_LT0__strgmsg(G_monthlyCellRunoff, s_temp);
-
     }
-    // endif options
 }
-// end list_LT0__annualInit
 
 // List NaN values of monthly output grids (selected variables from annualInit)
 void routingClass::list_NaN__annualInit() {
@@ -327,12 +314,7 @@ void routingClass::list_NaN__annualInit() {
         list_array2Dng12_double_NaN__strgmsg(G_monthlyCellRunoff, s_temp);
 
     }
-    // endif options
 }
-// end list_NaN__annualInit
-
-// Check Felix Portmann 2015 for invalid data
-// END Definitions
 
 
 #endif // WATERGAP_CHECKS_GLOBAL_H

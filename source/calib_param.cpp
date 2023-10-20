@@ -22,39 +22,19 @@
 
 // Include headers, eg. jason11.hpp
 #include "calib_param.h"
-//#include <cstdio>
-
+#include "globals.h"
 
 // original namespace of json11 library
 using namespace json11;
-using std::string;  // 
+using std::string;
 
 // for time accounting
-extern double timediff(struct timeval tv2_local, struct timeval tv1_local);
+//extern double timediff(struct timeval tv2_local, struct timeval tv1_local);
 // Difference in time
 struct timeval tv1_local, tv2_local; // for gettimeofday (sys/time.h)
 
-
-// to be read as parameters when calling the program
-// directories
-//std::string str_inputdir; // e.g. "/home/temp90/nobackup/portmann/WaterGAP2_2/JSON/JSON_WG_param2jsonfile"
-//std::string str_outputdir; // e.g. "/home/temp90/nobackup/portmann/WaterGAP2_2/JSON/JSON_WG_param2jsonfile"
-// // filenames
-//std::string str_filename_in_paramglobal; // e.g. "calib_parameters_initial_global.json"
-//std::string str_filename_in_paramcell; // e.g. "calib_parameters_initial_cell.json"
-
-// // to be composed later
-//std::string str_filename; // unspecific string for filenames (composed later)
-//std::string str_pathfilename;
-
 // String for error messages, e.g. during parsing
 std::string str_err;
-	
-
-// definitions specific to WaterGAP (when possibly testing file opening procedure)
-// char filename[250];
-// char inputdir[250];
-
 
 //
 // Methods
@@ -62,20 +42,11 @@ std::string str_err;
 
 // Operators necessary to iterate over enum eCalibParam
 // http://stackoverflow.com/questions/8498300/allow-for-range-based-for-with-enum-classes
-// 2015-10-21
 eCalibParam operator++( eCalibParam& x ){ return x = (eCalibParam)(((int)(x) + 1)); }
 eCalibParam operator*(eCalibParam c) {return c;}
 eCalibParam begin(eCalibParam r) {return eCalibParam::First;}
 // end iterator needs to return one past the end!
 eCalibParam end(eCalibParam r)   {return eCalibParam(int(eCalibParam::Last) + 1);}
-
-
-// Conversion of directory as character to directory as string
-//void calibParamClass::convert_to_str(std::string str_string, char char250)
-//{
-//  str_string = string(char250);
-//}
-// end calibParam::convert_to_str()
 
 // Define vectors for names
 std::vector<std::string> vct_descriptor_name(n_descriptors);
@@ -88,7 +59,6 @@ std::vector<std::string> vct_parameter(n_parameters);
 void calibParamClass::defineVNamesCalibParamJson() {
 
 	try {
-//		cout << "START calibParamClass::defineVNamesCalibParamJson()" << endl; // CHECK
 
 		//
 		// Descriptors
@@ -113,15 +83,13 @@ void calibParamClass::defineVNamesCalibParamJson() {
 				case 11: tmp_string=string("creation_staff"); break;
 				case 12: tmp_string=string("comments"); break;
 			}
+
 			vct_descriptor_name[i]=tmp_string;
-			// check
-//			cout << "vct_descriptor_name[" << i << "]: " << vct_descriptor_name[i] << endl;
 		}
 
 
 
 		// Fill vector of descriptor types
-
 		for (int i=0; i < n_descriptors; i++) {
 			string tmp_string;
 			switch (i) {
@@ -140,8 +108,6 @@ void calibParamClass::defineVNamesCalibParamJson() {
 				case 12: tmp_string=string("string"); break;
 			}
 			vct_descriptor_type[i]=tmp_string;
-			// check
-//			cout << "vct_descriptor_type[" << i << "]: " << vct_descriptor_type[i] << endl;
 		}
 
 
@@ -160,7 +126,6 @@ void calibParamClass::defineVNamesCalibParamJson() {
 				case 1: tmp_string=string("arc_id"); break; // ArcID from file
 				}
 			vct_ordinator[i]=tmp_string;
-//			cout << "vct_ordinator[" << i << "]: " << vct_ordinator[i] << endl;
 		}
 
 
@@ -203,21 +168,16 @@ void calibParamClass::defineVNamesCalibParamJson() {
 				case 25: tmp_string=string("precip_mult"); break;
 			}
 			vct_parameter[i]=tmp_string;
-//			cout << "vct_parameter[" << i << "]: " << vct_parameter[i] << endl;
 		}
 
 	}
-	// end try
 
 	// Catch exception if necessary
 	catch(std::exception &e)
 	{
 		throw(Exception(std::string("Exception in calibParamClass::defineVNamesCalibParamJson() :\n")+e.what()));
 	}
-	// end catch
-
 }
-// end calibParam::defineVNamesCalibParamJson()
 
 
 // Read cell-specific calibration parameters from text file (structure JSON)
@@ -225,7 +185,6 @@ void calibParamClass::defineVNamesCalibParamJson() {
 void calibParamClass::readJson(std::string str_pathfilename_local) {
 
 	try {
-	//	cout << "START calibParamClass::readjson(" << str_pathfilename_local << ")" << endl; // CHECK
 
 		// Reading JSON file with parameters:
 		//	(1) Reading the parameter textfile into a string
@@ -260,23 +219,18 @@ void calibParamClass::readJson(std::string str_pathfilename_local) {
 
 		if (infile_calibParam_Json_text.is_open()){
 
-	//		cout << "Opened file '" << str_pathfilename_local << "'" << endl;
-
 			// read all data from streamfile object to character
 			while ( getline(infile_calibParam_Json_text, str_newline, '\n') ) {
 				// cout << "newline : " << str_newline << endl;
 				str_filecontent += str_newline;
 			}
-
-			// cout << "str_filecontent : " << str_filecontent << endl;
-	//		cout << "Closing read-in textfile '" << str_pathfilename_local << "'" << endl;
 			infile_calibParam_Json_text.close();
 
 		} else std::cout << "Unable to open file '" << str_pathfilename_local << "'" << endl;
 
 		// measure time
 		gettimeofday(&tv2_local, NULL);
-		cout << "Time difference in Wallclock Time (seconds): = " << timediff(tv2_local, tv1_local) << endl;
+		//cout << "Time difference in Wallclock Time (seconds): = " << timediff(tv2_local, tv1_local) << endl;
 
 
 		//
@@ -292,7 +246,7 @@ void calibParamClass::readJson(std::string str_pathfilename_local) {
 		}
 
 		gettimeofday(&tv2_local, NULL);
-		cout << "Time difference in Wallclock Time (seconds): = " << timediff(tv2_local, tv1_local) << endl;
+		//cout << "Time difference in Wallclock Time (seconds): = " << timediff(tv2_local, tv1_local) << endl;
 
 
 		//
@@ -302,7 +256,6 @@ void calibParamClass::readJson(std::string str_pathfilename_local) {
 
 		if (calibParamJson.is_object()) {
 			cout << "OK 1 - JSON Object generated" << endl;
-	//		cout << "dump calibParamJson: " << calibParamJson.dump() << "\n";
 			ng_fromfile = calibParamJson["ng_param"].number_value();
 			if (ng != ng_fromfile) {
 				cerr << "ERROR readJson(): Predefined number of grid cells " << ng << " does not match number found in JSON object header " << ng_fromfile << endl;
@@ -315,7 +268,6 @@ void calibParamClass::readJson(std::string str_pathfilename_local) {
 
 
 		}
-		// end if object (expected type)
 		else {
 			cerr << "ERROR readJson(): calibParamJson.is_object() == false" << endl;
 			cerr << "Something went wrong with the file. Please check the file!" << endl;
@@ -323,69 +275,49 @@ void calibParamClass::readJson(std::string str_pathfilename_local) {
 		}
 
 	}
-	// end try
 
 	// Catch exception if necessary
 	catch(std::exception &e)
 	{
 		throw(Exception(std::string("Exception in calibParamClass::readJson() :\n")+e.what()));
 	}
-	// end catch
-
 }
-// end calibParamClass::readJson() {
-
 
 // Call of detailed check of parsed JSON object
 void calibParamClass::callCheckJson() {
 
 	try {
-
-		//	cout << "START calibParam.callCheckJson()" << endl;
-
 		// Check format of JSON sub-objects
 		checkJson(calibParamJson);
 
 		// Check correct sequence of GCRC cell numbers
 		checkJsonGCRCseq(calibParamJson);
-
 	}
-	// end try
 
 	// Catch exception if necessary
 	catch(std::exception &e)
 	{
 		throw(Exception(std::string("Exception in calibParamClass::callCheckJson() :\n")+e.what()));
 	}
-	// end catch
-
 }
-// end calibParamClass::callCheckJson();
-
 
 // Detailed check of parsed JSON object
 void calibParamClass::checkJson(json11::Json calibParamJson) {
 
 	try {
-	//	cout << "START calibParam.checkJson()" << endl;
-
 		// (3.1) Loop over descriptors
 		for (int i=0; i<n_descriptors; i++) {
 
-			// cout << "i: " << i << endl;
 			cout << "vct_descriptor_name[" << i << "]: " << vct_descriptor_name[i] << endl;
-			// cout << "dump value: " << calibParamJson[vct_descriptor_name[i]].dump() << endl;
 
 			if (calibParamJson[vct_descriptor_name[i]].is_string()) {
 				cout << "calibParamJson[\"" << vct_descriptor_name[i] << "\"].is_string() == true" << endl;
 				cout << "dump: " << calibParamJson[vct_descriptor_name[i]].dump() << endl;
 			}
-			// end if string (expected type)
 			if (calibParamJson[vct_descriptor_name[i]].is_number()) {
 				cout << "calibParamJson[\"" << vct_descriptor_name[i] << "\"].is_number() == true" << endl;
 				cout << "dump: " << calibParamJson[vct_descriptor_name[i]].dump() << endl;
 			}
-			// end if number (expected type)
 
 			// Erroneous array
 			if (calibParamJson[vct_descriptor_name[i]].is_array()) {
@@ -400,15 +332,12 @@ void calibParamClass::checkJson(json11::Json calibParamJson) {
 			}
 
 		}
-		// end for loop over descriptors
 
 
 		// (3.2) Loop over ordinators
 		for (int i=0; i<n_ordinators; i++) {
 
-			// cout << "i: " << i << endl;
 			cout << "vct_ordinator[" << i << "]: " << vct_ordinator[i] << endl;
-			// cout << "dump value (possibly array): " << calibParamJson[vct_ordinator[i]].dump() << endl;
 
 			if (calibParamJson[vct_ordinator[i]].is_array()) {
 				cout << "calibParamJson[\"" << vct_ordinator[i] << "\"].is_array() == true" << endl;
@@ -419,7 +348,6 @@ void calibParamClass::checkJson(json11::Json calibParamJson) {
 					}
 
 			}
-			// end if array (expected type)
 
 			if (calibParamJson[vct_ordinator[i]].is_object()) {
 				cout << "ATTENTION/ERROR: calibParamJson[\"" << vct_ordinator[i] << "\"].is_object() == true" << endl;
@@ -427,7 +355,6 @@ void calibParamClass::checkJson(json11::Json calibParamJson) {
 			}
 
 		}
-		// end for loop over ordinators
 
 
 		// (3.3) Loop over parameters
@@ -435,23 +362,16 @@ void calibParamClass::checkJson(json11::Json calibParamJson) {
 
 			cout << "i: " << i << endl;
 			cout << "vct_parameter[" << i << "]: " << vct_parameter[i] << endl;
-			// cout << "dump value (possibly array): " << calibParamJson[vct_parameter[i]].dump() << endl;
 
 		   if (calibParamJson[vct_parameter[i]].is_array()) {
 				cout << "calibParamJson[\"" << vct_parameter[i] << "\"].is_array() == true" << endl;
 
-					// check
-					for (int n=0; n < n_elements_test; n++) {
-						cout << "pos: " << n << setprecision(n_digits_coutprecision) << " number_value(): " << calibParamJson[vct_parameter[i]][n].number_value() << endl;
-					}
-	// full array
-	//		 std::cout << "dump calibParamJson[" << vct_parameter[i] << "]: " << calibParamJson[vct_parameter[i]].dump() << "\n";
-	//		for (auto &k : calibParamJson[vct_parameter[i]].array_items()) {
-	//			std::cout << "    - " << k.dump() << "\n";
-	//		}
+				// check
+				for (int n=0; n < n_elements_test; n++) {
+					cout << "pos: " << n << setprecision(n_digits_coutprecision) << " number_value(): " << calibParamJson[vct_parameter[i]][n].number_value() << endl;
+				}
 
 			}
-			// end if array (expected type)
 
 			// Erroneous object
 			if (calibParamJson[vct_parameter[i]].is_object()) {
@@ -461,28 +381,19 @@ void calibParamClass::checkJson(json11::Json calibParamJson) {
 
 
 		}
-		// end for loop over parameters
-
 	}
-	// end try
 
 	// Catch exception if necessary
 	catch(std::exception &e)
 	{
 		throw(Exception(std::string("Exception in calibParamClass::checkJson() :\n")+e.what()));
 	}
-	// end catch
-
 }
-// end calibParamClass::checkJson()
-
 
 // Check ascending GCRC sequence in parsed JSON object
 void calibParamClass::checkJsonGCRCseq(json11::Json calibParamJson) {
 
 	try {
-	//	cout << "START calibParam.checkJsonGCRCseq()" << endl;
-
 		double diff = 0;
 		short indicator_diff_wrong = 0;
 		int gcrc_firstwrong = 0;
@@ -516,7 +427,6 @@ void calibParamClass::checkJsonGCRCseq(json11::Json calibParamJson) {
 				}
 
 			}
-			// end for loop over grid cells
 
 			if (indicator_diff_wrong) {
 				cerr << "ERROR: GCRC cell numbers increment unequal to 1, first gcrc:" << gcrc_firstwrong << " last gcrc:" << gcrc_lastwrong << endl;
@@ -533,169 +443,18 @@ void calibParamClass::checkJsonGCRCseq(json11::Json calibParamJson) {
 		}
 
 	}
-	// end try
 
 	// Catch exception if necessary
 	catch(std::exception &e)
 	{
 		throw(Exception(std::string("Exception in calibParamClass::checkJsonGCRCseq() :\n")+e.what()));
 	}
-	// end catch
-
 }
-// end calibParamClass::checkJsonGCRC()
-
-
-// Currently in header as inline function withiut try & catch exception
-//// Get cell-specific calibration parameter value for a specific parameter
-// double calibParamClass::getValue(eCalibParam eCalibParam_local, int n_local) {
-//	// Requisite: Check after parsing, within readjson()
-//	// that calibParamJson.is_object() == true
-
-//	// Possible implicit checks:
-//	//	calibParamJson is object
-//	//	n_local is within valid range 0 ... ng-1
-//	try {
-
-////		cout << "CHECK START calibParam.getValue()" << endl;
-////		cout << "CHECK eCalibParam_local = " << eCalibParam_local << endl;
-////		cout << "CHECK n_local = " << n_local << endl;
-
-//		double dbl_value = 0.0;
-
-//		switch(eCalibParam_local){
-
-//			case P_GAMRUN_C:
-////				cout << "P_GAMRUN_C" << endl;
-//				dbl_value = calibParamJson["gammaHBV_runoff_coeff"][n_local].number_value();
-//				break;
-//			case P_CFA:
-////				cout << "P_CFA" << endl;
-//				dbl_value = calibParamJson["CFA_cellCorrFactor"][n_local].number_value();
-//				break;
-//			case P_CFS:
-////				cout << "P_CFS" << endl;
-//				dbl_value = calibParamJson["CFS_statCorrFactor"][n_local].number_value();
-//				break;
-//			case M_ROOT_D:
-////				cout << "M_ROOT_D" << endl;
-//				dbl_value = calibParamJson["root_depth_multiplier"][n_local].number_value();
-//				break;
-//			case M_RIVRGH_C:
-////				cout << "M_RIVRGH_C" << endl;
-//				dbl_value = calibParamJson["river_roughness_coeff_mult"][n_local].number_value();
-//				break;
-//			case P_LAK_D:
-////				cout << "P_LAK_D" << endl;
-//				dbl_value = calibParamJson["lake_depth"][n_local].number_value();
-//				break;
-//			case P_WET_D:
-////				cout << "P_WET_D" << endl;
-//				dbl_value = calibParamJson["wetland_depth"][n_local].number_value();
-//				break;
-//			case P_SWOUTF_C:
-////				cout << "P_SWOUTF_C" << endl;
-//				dbl_value = calibParamJson["surfacewater_outflow_coefficient"][n_local].number_value();
-//				break;
-//			case M_EVAREDEX:
-////				cout << "M_EVAREDEX" << endl;
-//				dbl_value = calibParamJson["evapo_red_fact_exp_mult"][n_local].number_value();
-//				break;
-//			case M_NETRAD:
-////				cout << "M_NETRAD" << endl;
-//				dbl_value = calibParamJson["net_radiation_mult"][n_local].number_value();
-//				break;
-//			case P_PTC_HUM:
-////				cout << "P_PTC_HUM" << endl;
-//				dbl_value = calibParamJson["PT_coeff_humid"][n_local].number_value();
-//				break;
-//			case P_PTC_ARI:
-////				cout << "P_PTC_ARI" << endl;
-//				dbl_value = calibParamJson["PT_coeff_arid"][n_local].number_value();
-//				break;
-//			case P_PET_MXDY:
-////				cout << "P_PET_MXDY" << endl;
-//				dbl_value = calibParamJson["max_daily_PET"][n_local].number_value();
-//				break;
-//			case P_MCWH:
-////				cout << "P_MCWH" << endl;
-//				dbl_value = calibParamJson["mcwh"][n_local].number_value();
-//				break;
-//			case M_LAI:
-////				cout << "M_LAI" << endl;
-//				dbl_value = calibParamJson["LAI_mult"][n_local].number_value();
-//				break;
-//			case P_T_SNOWFZ:
-////				cout << "P_T_SNOWFZ" << endl;
-//				dbl_value = calibParamJson["snow_freeze_temp"][n_local].number_value();
-//				break;
-//			case P_T_SNOWMT:
-////				cout << "P_T_SNOWMT" << endl;
-//				dbl_value = calibParamJson["snow_melt_temp"][n_local].number_value();
-//				break;
-//			case M_DEGDAY_F:
-////				cout << "M_DEGDAY_F" << endl;
-//				dbl_value = calibParamJson["degree_day_factor_mult"][n_local].number_value();
-//				break;
-//			case P_T_GRADNT:
-////				cout << "P_T_GRADNT" << endl;
-//				dbl_value = calibParamJson["temperature_gradient"][n_local].number_value();
-//				break;
-//			case M_GW_F:
-////				cout << "M_GW_F" << endl;
-//				dbl_value = calibParamJson["gw_factor_mult"][n_local].number_value();
-//				break;
-//			case M_RG_MAX:
-////				cout << "M_RG_MAX" << endl;
-//				dbl_value = calibParamJson["rg_max_mult"][n_local].number_value();
-//				break;
-//			case P_PCRITGWA:
-////				cout << "P_PCRITGWA" << endl;
-//				dbl_value = calibParamJson["pcrit_aridgw"][n_local].number_value();
-//				break;
-//			case P_GWOUTF_C:
-////				cout << "P_GWOUTF_C" << endl;
-//				dbl_value = calibParamJson["groundwater_outflow_coeff"][n_local].number_value();
-//				break;
-//			case M_NETABSSW:
-////				cout << "M_NETABSSW" << endl;
-//				dbl_value = calibParamJson["net_abstraction_surfacewater_mult"][n_local].number_value();
-//				break;
-//			case M_NETABSGW:
-////				cout << "M_NETABSGW" << endl;
-//				dbl_value = calibParamJson["net_abstraction_groundwater_mult"][n_local].number_value();
-//				break;
-//			case M_PREC:
-////				cout << "M_PREC" << endl;
-//				dbl_value = calibParamJson["precip_mult"][n_local].number_value();
-//				break;
-//			default:
-//				cerr << "calibParamClass::getValue() - unknown parameter name/number '" << eCalibParam_local << "' set value to zero" << endl;
-//				// dbl_value = 0.0; // as initialized
-//				break;
-//		}
-//		// end switch
-
-////		cout << "CHECK dbl_value = " << dbl_value << endl;
-//		return dbl_value;
-
-//	}
-//	// end try
-
-//	// Catch exception if necessary
-//	catch(std::exception &e)
-//	{
-//		throw(Exception(std::string("Exception in calibParamClass::getValue() :\n")+e.what()));
-//	}
-//	// end catch
-
-//}
-//// end calibParamClass::getValue()
-
 
 // Print cell-specific calibration parameter value for a specific parameter
 // With precision as defined in header
 void calibParamClass::printValue(eCalibParam eCalibParam_local, int n_local) {
+
 	// Requisite: Check after parsing, within readjson()
 	// that calibParamJson.is_object() == true
 
@@ -703,8 +462,6 @@ void calibParamClass::printValue(eCalibParam eCalibParam_local, int n_local) {
 	//	calibParamJson is object
 	//	n_local is within valid range 0 ... ng-1
 	try {
-
-//		cout << "CHECK calibParam.printValue(cell_n:" << n_local << ")" << endl;
 
 		switch(eCalibParam_local){
 
@@ -816,21 +573,14 @@ void calibParamClass::printValue(eCalibParam eCalibParam_local, int n_local) {
 				cerr << "calibParamClass::printValue() - unknown parameter name/number '" << eCalibParam_local << endl;
 				break;
 		}
-		// end switch
-
 	}
-	// end try
 
 	// Catch exception if necessary
 	catch(std::exception &e)
 	{
 		throw(Exception(std::string("Exception in calibParamClass::printValue() :\n")+e.what()));
 	}
-	// end catch
-
 }
-// end calibParamClass::printValue()
-
 
 // Print cell-specific calibration parameter value of all parameters
 void calibParamClass::printValueAllParam(int n_local) {
@@ -843,18 +593,13 @@ void calibParamClass::printValueAllParam(int n_local) {
 			printValue(eCalibParam_local, n_local);
 		}
 	}
-	// end try
 
 	// Catch exception if necessary
 	catch(std::exception &e)
 	{
 		throw(Exception(std::string("Exception in calibParamClass::printValueAllParam() :\n")+e.what()));
 	}
-	// end catch
-
 }
-// end calibParamClass::printValueAllParam()
-
 
 // Check the speed of iteration over all values of all calibration parameters
 void calibParamClass::checkJsonSpeed() {
@@ -870,21 +615,16 @@ void calibParamClass::checkJsonSpeed() {
 
 		// end time
 		gettimeofday(&tv2_local, NULL);
-		cout << "Time difference in Wallclock Time (seconds): = " << timediff(tv2_local, tv1_local) << endl;
+		//cout << "Time difference in Wallclock Time (seconds): = " << timediff(tv2_local, tv1_local) << endl;
 
 	}
-	// end try
 
 	// Catch exception if necessary
 	catch(std::exception &e)
 	{
 		throw(Exception(std::string("Exception in calibParamClass::checkJsonSpeed() :\n")+e.what()));
 	}
-	// end catch
-
 }
-// end calibParamClass::checkJsonSpeed()
-
 
 // Iterate over all cell-specific calibration parameter value of all parameters
 // For checking the performance
@@ -896,26 +636,19 @@ void calibParamClass::iterateGetAllValueAllParam() {
 		int n_local = 0;
 		// Loop over enum of calibration parameters
 		// Syntax: http://stackoverflow.com/questions/8498300/allow-for-range-based-for-with-enum-classes
+
 		for (const auto &eCalibParam_local : eCalibParam()) {
 
 			// Loop over grid cells
 			for (n_local=0; n_local<calibParamJson["ng_param"].number_value(); n_local++) {
 				dbl_local = getValue(eCalibParam_local, n_local);
 			}
-			// end loop over grid cells
-
 		}
-		// end loop over parameters
 	}
-	// end try
 
 	// Catch exception if necessary
 	catch(std::exception &e)
 	{
 		throw(Exception(std::string("Exception in calibParamClass::iterateGetAllValueAllParam() :\n")+e.what()));
 	}
-	// end catch
-
 }
-// end calibParamClass::iterateGetAllValueAllParam()
-

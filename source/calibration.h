@@ -24,13 +24,12 @@ class calibGammaClass {
 	void writeCorrFactors(float gamma, int cellCorrFactorInd);
 	void writeCalibStatus(int calibStatus);
 	float getCellCorrFactor();
-        short getCallCounter();
-        int getCalibStatus();
+    short getCallCounter();
+    int getCalibStatus();
 	void createCorrectionGrid(short startYear, short endYear,
 							  float simulatedDischarge, float measuredDischarge);
 
-
-        short CallCounterNo;
+    short CallCounterNo;
 
   private:
 	char logFileName[250];
@@ -46,7 +45,7 @@ class calibGammaClass {
 
 	float gammaUpperLimit, gammaLowerLimit;
 	float gammaOfPreviousRun;
-        float cellCorrFactor = 1.;
+    float cellCorrFactor = 1.;
 
 };
 
